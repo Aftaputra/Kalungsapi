@@ -43,31 +43,17 @@ function initializeWebSocket() {
  * Handle initial data from server
  */
 function handleInitialData(data) {
-    console.log('📦 Loading initial data... ', data);
+    console.log('📦 Received initial data from server');
     
-    // Load sensor readings
-    if (data.sensor_readings && data.sensor_readings.length > 0) {
-        state.sensorReadings = data.sensor_readings. map(reading => ({
-            id: reading.id,
-            timestamp: reading.timestamp,
-            deviceId: reading.device_id,
-            imu_x: reading.imu_x,
-            imu_y: reading.imu_y,
-            imu_z: reading.imu_z,
-            suhu_kaki: reading.suhu_kaki,
-            vbatt_kaki: reading. vbatt_kaki,
-            suhu_leher: reading.suhu_leher,
-            vbatt_leher:  reading.vbatt_leher,
-            latitude: reading.latitude,
-            longitude: reading.longitude,
-            spo2: reading.spo2,
-            heart_rate: reading.heart_rate
-        }));
+    if (! data) {
+        console.warn('No initial data');
+        return;
     }
     
-    // Load devices
-    if (data.devices && data.devices.length > 0) {
-        state.devices = data.devices.map(device => ({
+    // ✅ HANYA update devices dan connected status, JANGAN replace data yang sudah ada
+    if (data.devices && Array.isArray(data.devices)) {
+        // Update devices (tapi jangan hapus data sensor)
+        const newDevices = data.devices.map(device => ({
             id: device.device_id,
             cowId: device.cow_id || device.device_id. replace('DEV', ''),
             status: determineDeviceStatus(device.last_seen),
@@ -75,75 +61,100 @@ function handleInitialData(data) {
             lastData: device.last_seen ?  new Date(device.last_seen) : new Date(),
             firmwareVersion: device.firmware_version || 'Unknown'
         }));
-    }
-    
-    // Add connected devices status
-    if (data.connected_devices) {
-        data.connected_devices.forEach(deviceId => {
-            const device = state.devices.find(d => d.id === deviceId);
-            if (device) {
-                device.status = 'online';
+        
+        // Merge dengan existing devices
+        newDevices.forEach(newDev => {
+            const existing = state.devices.find(d => d.id === newDev.id);
+            if (existing) {
+                Object.assign(existing, newDev);
+            } else {
+                state.devices.push(newDev);
             }
         });
     }
     
-    // Update UI
-    populateFilters();
-    applyFilters();
-    updateQuickStats();
-    renderDeviceStatus();
-    initializeCharts();
+    // ✅ HANYA load data dari server jika state kosong
+    if (state. sensorReadings.length === 0 && data.sensor_readings && data.sensor_readings.length > 0) {
+        state.sensorReadings = data.sensor_readings. map(reading => ({
+            timestamp: reading.timestamp,
+            deviceId: reading.device_id,
+            imu_x: reading.imu_x || 0,
+            imu_y: reading.imu_y || 0,
+            imu_z: reading.imu_z || 0,
+            suhu_kaki: reading.suhu_kaki || 0,
+            vbatt_kaki: reading.vbatt_kaki || 0,
+            suhu_leher: reading.suhu_leher || 0,
+            vbatt_leher: reading. vbatt_leher || 0,
+            latitude: reading.latitude || 0,
+            longitude: reading.longitude || 0,
+            spo2: reading.spo2 || 0,
+            heart_rate: reading.heart_rate || 0
+        }));
+        
+        console.log(`✅ Loaded ${state.sensorReadings.length} initial readings`);
+    }
     
-    console.log('✅ Initial data loaded');
+    // Update connected devices
+    if (data.connected_devices && Array.isArray(data.connected_devices)) {
+        data.connected_devices.forEach(deviceId => {
+            const device = state.devices.find(d => d.id === deviceId);
+            if (device) device.status = 'online';
+        });
+    }
+    
+    // Update UI
+    requestAnimationFrame(() => {
+        populateFilters();
+        applyFilters();
+        updateQuickStats();
+        renderDeviceStatus();
+        initializeCharts();
+    });
 }
 
 /**
  * Handle new sensor data (real-time)
  */
 function handleNewSensorData(data) {
-    console.log('📊 New sensor data:', data);
+    console.log('📊 New sensor data:', data. device_id);
     
     // Convert to internal format
     const newReading = {
         timestamp: data.timestamp,
         deviceId: data.device_id,
-        imu_x: data.imu_x,
-        imu_y: data.imu_y,
-        imu_z: data.imu_z,
-        suhu_kaki:  data.suhu_kaki,
-        vbatt_kaki: data.vbatt_kaki,
-        suhu_leher: data.suhu_leher,
-        vbatt_leher: data.vbatt_leher,
-        latitude:  data.latitude,
-        longitude: data.longitude,
-        spo2: data.spo2,
-        heart_rate: data. heart_rate
+        imu_x: data.imu_x || 0,
+        imu_y: data. imu_y || 0,
+        imu_z: data.imu_z || 0,
+        suhu_kaki: data.suhu_kaki || 0,
+        vbatt_kaki: data.vbatt_kaki || 0,
+        suhu_leher: data.suhu_leher || 0,
+        vbatt_leher: data.vbatt_leher || 0,
+        latitude: data.latitude || 0,
+        longitude:  data.longitude || 0,
+        spo2: data.spo2 || 0,
+        heart_rate: data.heart_rate || 0
     };
     
-    // Add to beginning of array (newest first)
+    // Add to beginning (newest first)
     state.sensorReadings.unshift(newReading);
     
-    // Keep only last 1000 readings in memory
-    if (state.sensorReadings.length > 1000) {
+    // Keep only last 1000 readings
+    if (state.sensorReadings. length > 1000) {
         state.sensorReadings = state.sensorReadings.slice(0, 1000);
     }
     
-    // Update device last seen
+    // ✅ SAVE to localStorage
+    saveDataToLocalStorage();
+    
+    // Update device status
     const device = state. devices.find(d => d. id === data.device_id);
     if (device) {
         device.lastData = new Date(data.timestamp);
         device.status = 'online';
     }
     
-    // Re-apply filters and update UI
-    applyFilters();
-    updateQuickStats();
-    renderDeviceStatus();
-    
-    // Update charts every 10 readings
-    if (state.sensorReadings.length % 10 === 0) {
-        updateCharts();
-    }
+    // Update UI (tanpa reload penuh)
+    updateUIIncremental();
 }
 
 /**
@@ -172,6 +183,62 @@ function handleDeviceConnected(deviceId) {
     
     renderDeviceStatus();
     updateQuickStats();
+}
+
+/**
+ * Save data to localStorage
+ */
+function saveDataToLocalStorage() {
+    try {
+        const dataToSave = {
+            sensorReadings: state.sensorReadings. slice(0, 500), // Save last 500
+            devices: state.devices,
+            timestamp: new Date().toISOString()
+        };
+        localStorage.setItem('farmtech_data', JSON.stringify(dataToSave));
+    } catch (e) {
+        console.warn('Failed to save to localStorage:', e);
+    }
+}
+
+/**
+ * Load data from localStorage
+ */
+function loadDataFromLocalStorage() {
+    try {
+        const saved = localStorage.getItem('farmtech_data');
+        if (saved) {
+            const data = JSON.parse(saved);
+            state.sensorReadings = data. sensorReadings || [];
+            state.devices = data.devices || [];
+            console.log(`📦 Loaded ${state. sensorReadings.length} readings from localStorage`);
+            return true;
+        }
+    } catch (e) {
+        console.warn('Failed to load from localStorage:', e);
+    }
+    return false;
+}
+
+/**
+ * Update UI incrementally (tanpa reload penuh)
+ */
+function updateUIIncremental() {
+    // Update stats
+    updateQuickStats();
+    
+    // Update table HANYA jika di halaman 1
+    if (state.currentPage === 1) {
+        renderSensorDataTable();
+    }
+    
+    // Update device status
+    renderDeviceStatus();
+    
+    // Update chart setiap 10 data
+    if (state.sensorReadings.length % 10 === 0) {
+        updateCharts();
+    }
 }
 
 /**
@@ -887,16 +954,29 @@ function changePage(direction) {
  * Initialize application
  */
 function initializeApp() {
-    console.log('🚀 Initializing FarmTech Dashboard...');
+    console.log('🚀 Initializing FarmTech Dashboard.. .');
     
-    // Initialize WebSocket connection
+    // ✅ LOAD from localStorage FIRST
+    const hasLocalData = loadDataFromLocalStorage();
+    
+    if (hasLocalData) {
+        // Render data yang ada
+        populateFilters();
+        applyFilters();
+        updateQuickStats();
+        renderDeviceStatus();
+        initializeCharts();
+        console.log('✅ UI rendered from localStorage');
+    }
+    
+    // Initialize WebSocket (akan merge dengan data lokal)
     initializeWebSocket();
     
-    // Set current time and update every second
+    // Set current time
     updateCurrentTime();
     setInterval(updateCurrentTime, 1000);
     
-    // Set default dates for export
+    // Set default export dates
     const today = new Date().toISOString().split('T')[0];
     const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
     document.getElementById('startDate').value = yesterday;
@@ -913,35 +993,29 @@ function initializeApp() {
     
     document.getElementById('refreshBtn').addEventListener('click', refreshData);
     
-    // Export modal handling
+    // Export modal
     const exportModal = document.getElementById('exportModal');
-    const exportBtn = document.getElementById('exportBtn');
-    const closeModal = document.getElementById('closeModal');
-    const cancelExport = document.getElementById('cancelExport');
-    const confirmExport = document.getElementById('confirmExport');
-    
-    exportBtn.addEventListener('click', () => {
+    document.getElementById('exportBtn').addEventListener('click', () => {
         exportModal.classList.add('active');
     });
     
-    closeModal.addEventListener('click', () => {
+    document.getElementById('closeModal').addEventListener('click', () => {
         exportModal.classList.remove('active');
     });
     
-    cancelExport.addEventListener('click', () => {
+    document.getElementById('cancelExport').addEventListener('click', () => {
         exportModal.classList.remove('active');
     });
     
-    confirmExport.addEventListener('click', exportData);
+    document.getElementById('confirmExport').addEventListener('click', exportData);
     
-    // Close modal when clicking outside
     exportModal.addEventListener('click', (e) => {
         if (e.target === exportModal) {
             exportModal.classList.remove('active');
         }
     });
     
-    // Pagination buttons
+    // Pagination
     document.getElementById('prevPage').addEventListener('click', () => changePage('prev'));
     document.getElementById('nextPage').addEventListener('click', () => changePage('next'));
     
