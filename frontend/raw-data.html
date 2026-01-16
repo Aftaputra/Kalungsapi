@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FarmTech - Raw Data Monitoring</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min. js"></script>
+    
+    <link href="https://fonts.googleapis.com/css2? family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        :root {
+            --farm-primary: #10b981;
+            --farm-secondary: #3b82f6;
+            --farm-accent: #8b5cf6;
+            --farm-warning: #f59e0b;
+            --farm-danger: #ef4444;
+        }
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            background-color: #f8fafc;
+        }
+        
+        .eng-card {
+            border: 1px solid #e2e8f0;
+            border-radius: 0;
+            background-color: white;
+            transition: box-shadow 0.2s;
+        }
+        
+        .eng-card:hover {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        }
+        
+        .eng-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size:  12px;
+        }
+        
+        .eng-table th {
+            background-color: #f1f5f9;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing:  0.5px;
+            color: #64748b;
+            border-bottom: 1px solid #e2e8f0;
+            padding: 10px 12px;
+            text-align: left;
+            position: sticky;
+            top: 0;
+            z-index:  10;
+        }
+        
+        .eng-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #f1f5f9;
+            color: #334155;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+        }
+        
+        .eng-table tr:hover {
+            background-color: #f8fafc;
+        }
+        
+        .value-high {
+            color: #ef4444;
+            font-weight: 600;
+            background-color: #fef2f2;
+        }
+        
+        .value-low {
+            color: #3b82f6;
+            font-weight: 600;
+            background-color: #eff6ff;
+        }
+        
+        .value-normal {
+            color: #10b981;
+        }
+        
+        .table-container {
+            overflow-x: auto;
+            max-height: 500px;
+        }
+        
+        .table-container::-webkit-scrollbar {
+            height: 6px;
+            width: 6px;
+        }
+        
+        .table-container::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        
+        .table-container::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+        
+        .sensor-status {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius:  50%;
+            margin-right: 6px;
+        }
+        
+        .sensor-online {
+            background-color: #10b981;
+            box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+            animation: pulse 2s infinite;
+        }
+        
+        .sensor-warning {
+            background-color: #f59e0b;
+            box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
+        }
+        
+        .sensor-offline {
+            background-color: #94a3b8;
+        }
+        
+        @keyframes pulse {
+            0%, 100% {
+                box-shadow:  0 0 0 2px rgba(16, 185, 129, 0.2);
+            }
+            50% {
+                box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.4);
+            }
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 250px;
+            width: 100%;
+        }
+        
+        .time-selector {
+            background: white;
+            border: 1px solid #e2e8f0;
+            padding: 6px 12px;
+            font-size: 13px;
+            color: #64748b;
+            cursor: pointer;
+        }
+        
+        .time-selector:hover {
+            border-color: #cbd5e1;
+        }
+        
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            opacity: 0;
+            visibility:  hidden;
+            transition: opacity 0.3s, visibility 0.3s;
+        }
+        
+        .modal-overlay.active {
+            opacity: 1;
+            visibility:  visible;
+        }
+        
+        .modal-content {
+            background: white;
+            border-radius: 0;
+            width: 90%;
+            max-width: 500px;
+            max-height:  90vh;
+            overflow-y: auto;
+            transform: translateY(-20px);
+            transition: transform 0.3s;
+        }
+        
+        .modal-overlay.active .modal-content {
+            transform: translateY(0);
+        }
+    </style>
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono:  ['Monaco', 'Menlo', 'Ubuntu Mono', 'monospace']
+                    },
+                    colors: {
+                        farm: {
+                            50: '#ecfdf5',
+                            100: '#d1fae5',
+                            500: '#10b981',
+                            600: '#059669',
+                            900: '#064e3b',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="text-slate-800">
+
+    <!-- Navigation -->
+    <nav class="bg-white border-b border-gray-200 px-4 py-3">
+        <div class="container mx-auto flex justify-between items-center">
+            <div class="flex items-center">
+                <i class="fa-solid fa-leaf text-farm-500 text-xl mr-2"></i>
+                <span class="text-lg font-bold text-gray-800">Farm<span class="text-farm-500">Tech</span> <span class="text-sm font-normal text-gray-500 ml-2">| Raw Data Dashboard</span></span>
+            </div>
+            <div class="flex items-center space-x-4">
+                <!-- WebSocket Connection Status -->
+                <div id="wsConnectionStatus" class="text-sm text-gray-500">
+                    <span class="sensor-status sensor-offline"></span> Connecting...
+                </div>
+                
+                <a href="index.html" class="text-sm text-gray-600 hover:text-gray-800">
+                    <i class="fa-solid fa-arrow-left mr-1"></i> Kembali ke Dashboard
+                </a>
+                <div class="text-sm text-gray-500">
+                    <i class="fa-solid fa-clock mr-1"></i> <span id="currentTime">Loading... </span>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mx-auto px-4 py-6">
+        
+        <!-- Header -->
+        <div class="mb-8">
+            <h1 class="text-2xl font-bold text-gray-800 mb-2">Raw Data Dashboard</h1>
+            <p class="text-sm text-gray-600">Real-time sensor monitoring system</p>
+        </div>
+
+        <!-- Quick Stats -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+            <div class="eng-card p-5">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <p class="text-sm font-medium text-gray-500 uppercase tracking-wider">Jumlah Device</p>
+                        <h3 class="text-2xl font-bold text-gray-800 mt-1" id="totalDevices">0</h3>
+                    </div>
+                    <div class="p-3 bg-blue-50 text-blue-500">
+                        <i class="fa-solid fa-microchip text-xl"></i>
+                    </div>
+                </div>
+                <div class="mt-4 pt-3 border-t border-gray-100">
+                    <div class="flex items-center text-sm text-gray-500" id="deviceStatus">
+                        <span class="sensor-status sensor-online"></span> 0 Online
+                        <span class="sensor-status sensor-warning ml-3"></span> 0 Warning
+                    </div>
+                </div>
+            </div>
+            
+            <div class="eng-card p-5">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <p class="text-sm font-medium text-gray-500 uppercase tracking-wider">Data Points</p>
+                        <h3 class="text-2xl font-bold text-gray-800 mt-1" id="totalDataPoints">0</h3>
+                    </div>
+                    <div class="p-3 bg-purple-50 text-purple-500">
+                        <i class="fa-solid fa-database text-xl"></i>
+                    </div>
+                </div>
+                <div class="mt-4 pt-3 border-t border-gray-100">
+                    <p class="text-sm text-gray-500" id="recentDataPoints">+0 dalam 1 jam terakhir</p>
+                </div>
+            </div>
+
+            <div class="eng-card p-5">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <p class="text-sm font-medium text-gray-500 uppercase tracking-wider">Sampling Rate</p>
+                        <h3 class="text-2xl font-bold text-gray-800 mt-1">1Hz</h3>
+                    </div>
+                    <div class="p-3 bg-green-50 text-green-500">
+                        <i class="fa-solid fa-wave-square text-xl"></i>
+                    </div>
+                </div>
+                <div class="mt-4 pt-3 border-t border-gray-100">
+                    <p class="text-sm text-gray-500">Interval: 1000ms</p>
+                </div>
+            </div>
+
+            <div class="eng-card p-5">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <p class="text-sm font-medium text-gray-500 uppercase tracking-wider">Data Size</p>
+                        <h3 class="text-2xl font-bold text-gray-800 mt-1" id="totalDataSize">0 MB</h3>
+                    </div>
+                    <div class="p-3 bg-amber-50 text-amber-500">
+                        <i class="fa-solid fa-hard-drive text-xl"></i>
+                    </div>
+                </div>
+                <div class="mt-4 pt-3 border-t border-gray-100">
+                    <p class="text-sm text-gray-500" id="todayDataSize">Hari ini: 0 MB</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="eng-card p-5 mb-8">
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div class="flex flex-wrap gap-3">
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">Device ID</label>
+                        <select id="deviceSelect" class="time-selector text-sm">
+                            <option value="all">Semua Device</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">Time Range</label>
+                        <select id="timeRange" class="time-selector text-sm">
+                            <option value="1h">1 Jam Terakhir</option>
+                            <option value="6h">6 Jam Terakhir</option>
+                            <option value="24h" selected>24 Jam Terakhir</option>
+                            <option value="7d">7 Hari Terakhir</option>
+                            <option value="30d">30 Hari Terakhir</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">Sensor Type</label>
+                        <select id="sensorType" class="time-selector text-sm">
+                            <option value="all">Semua Sensor</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">&nbsp;</label>
+                        <button id="applyFilters" class="bg-farm-500 hover:bg-farm-600 text-white px-4 py-2 text-sm font-medium">
+                            <i class="fa-solid fa-filter mr-1"></i> Apply Filters
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="flex space-x-2">
+                    <button id="exportBtn" class="border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 text-sm font-medium">
+                        <i class="fa-solid fa-download mr-1"></i> Export Data
+                    </button>
+                    <button id="refreshBtn" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 text-sm font-medium">
+                        <i class="fa-solid fa-rotate-right mr-1"></i> Refresh
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts Section -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <!-- Temperature Trends -->
+            <div class="eng-card">
+                <div class="p-4 border-b border-gray-100">
+                    <h3 class="font-semibold text-gray-700">🌡️ Temperature Trends (Last 24h)</h3>
+                    <p class="text-xs text-gray-500 mt-1">Suhu leher dan kaki device</p>
+                </div>
+                <div class="p-4">
+                    <div class="chart-container">
+                        <canvas id="tempChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- IMU Data Visualization -->
+            <div class="eng-card">
+                <div class="p-4 border-b border-gray-100">
+                    <h3 class="font-semibold text-gray-700">📈 IMU Sensor Data (Accelerometer)</h3>
+                    <p class="text-xs text-gray-500 mt-1">X, Y, Z axis movement</p>
+                </div>
+                <div class="p-4">
+                    <div class="chart-container">
+                        <canvas id="imuChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Raw Data Table -->
+        <div class="eng-card mb-8">
+            <div class="p-4 border-b border-gray-100 flex justify-between items-center">
+                <div>
+                    <h3 class="font-semibold text-gray-700">📊 Raw Sensor Data</h3>
+                    <p class="text-xs text-gray-500 mt-1">Timestamp | Device ID | Sensor Values</p>
+                </div>
+                <div class="text-xs text-gray-500">
+                    Menampilkan <span id="rowCount">0</span> dari <span id="totalRows">0</span> records
+                </div>
+            </div>
+            <div class="table-container">
+                <table class="eng-table" id="sensorDataTable">
+                    <thead id="tableHeader">
+                        <!-- Header akan diisi oleh JavaScript -->
+                    </thead>
+                    <tbody id="sensorDataBody">
+                        <!-- Data akan diisi oleh JavaScript -->
+                        <tr>
+                            <td colspan="100" class="text-center py-8 text-gray-500">
+                                <i class="fa-solid fa-spinner fa-spin mr-2"></i> Waiting for data...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="p-4 border-t border-gray-100 flex justify-between items-center">
+                <div class="text-sm text-gray-500">
+                    Update terakhir: <span id="lastUpdate">-</span>
+                </div>
+                <div class="flex space-x-2">
+                    <button id="prevPage" class="px-3 py-1 border border-gray-300 text-gray-600 hover:bg-gray-50 text-sm">
+                        <i class="fa-solid fa-chevron-left"></i>
+                    </button>
+                    <span class="px-3 py-1 text-sm text-gray-700">Halaman <span id="currentPage">1</span></span>
+                    <button id="nextPage" class="px-3 py-1 border border-gray-300 text-gray-600 hover:bg-gray-50 text-sm">
+                        <i class="fa-solid fa-chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Device Status -->
+        <div class="eng-card">
+            <div class="p-4 border-b border-gray-100">
+                <h3 class="font-semibold text-gray-700">🔧 Device Status & Diagnostics</h3>
+                <p class="text-xs text-gray-500 mt-1">Status semua device yang terhubung</p>
+            </div>
+            <div class="p-4">
+                <div class="grid grid-cols-1 md: grid-cols-3 gap-6">
+                    <!-- Device List -->
+                    <div class="md:col-span-2">
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm">
+                                <thead>
+                                    <tr class="border-b border-gray-200">
+                                        <th class="pb-2 text-left">Device ID</th>
+                                        <th class="pb-2 text-left">Sapi ID</th>
+                                        <th class="pb-2 text-left">Status</th>
+                                        <th class="pb-2 text-left">Baterai Leher</th>
+                                        <th class="pb-2 text-left">Baterai Kaki</th>
+                                        <th class="pb-2 text-left">Signal</th>
+                                        <th class="pb-2 text-left">Last Data</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="deviceStatusBody">
+                                    <tr>
+                                        <td colspan="7" class="text-center py-4 text-gray-500">No devices registered</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    
+                    <!-- Device Details -->
+                    <div>
+                        <div class="mb-6">
+                            <h4 class="font-medium text-gray-700 mb-3">Selected Device:  <span id="selectedDevice" class="font-bold">-</span></h4>
+                            <div class="space-y-3" id="deviceDetails">
+                                <div class="flex justify-between">
+                                    <span class="text-sm text-gray-600">Firmware Version</span>
+                                    <span class="text-sm font-medium">v2.1. 4</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-sm text-gray-600">Sampling Rate</span>
+                                    <span class="text-sm font-medium">1 sample/sec</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-sm text-gray-600">Storage Usage</span>
+                                    <span class="text-sm font-medium">45%</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-sm text-gray-600">Last Restart</span>
+                                    <span class="text-sm font-medium">3 days ago</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-sm text-gray-600">Errors (24h)</span>
+                                    <span class="text-sm font-medium text-red-500">0</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <h4 class="font-medium text-gray-700 mb-3">Quick Actions</h4>
+                            <div class="space-y-2">
+                                <button class="w-full text-left px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 text-sm font-medium">
+                                    <i class="fa-solid fa-wrench mr-2"></i> Reboot Device
+                                </button>
+                                <button class="w-full text-left px-3 py-2 bg-green-50 hover:bg-green-100 text-green-600 text-sm font-medium">
+                                    <i class="fa-solid fa-sync mr-2"></i> Sync Data Now
+                                </button>
+                                <button class="w-full text-left px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-600 text-sm font-medium">
+                                    <i class="fa-solid fa-file-export mr-2"></i> Export Device Logs
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Export Modal -->
+    <div id="exportModal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg font-bold text-gray-800">Export Data</h3>
+                    <button id="closeModal" class="text-gray-400 hover:text-gray-600">
+                        <i class="fa-solid fa-times text-xl"></i>
+                    </button>
+                </div>
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Format Export</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <label class="flex items-center p-3 border border-gray-300 cursor-pointer hover:bg-gray-50">
+                                <input type="radio" name="exportFormat" value="csv" checked class="mr-2">
+                                <div>
+                                    <div class="font-medium">CSV</div>
+                                    <div class="text-xs text-gray-500">Comma-separated values</div>
+                                </div>
+                            </label>
+                            <label class="flex items-center p-3 border border-gray-300 cursor-pointer hover:bg-gray-50">
+                                <input type="radio" name="exportFormat" value="json" class="mr-2">
+                                <div>
+                                    <div class="font-medium">JSON</div>
+                                    <div class="text-xs text-gray-500">JavaScript Object Notation</div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Date Range</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="text-xs text-gray-500 mb-1 block">Start Date</label>
+                                <input type="date" id="startDate" class="w-full px-3 py-2 border border-gray-300 text-sm">
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-500 mb-1 block">End Date</label>
+                                <input type="date" id="endDate" class="w-full px-3 py-2 border border-gray-300 text-sm">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Data Columns</label>
+                        <div class="border border-gray-300 p-3 max-h-40 overflow-y-auto" id="exportColumns">
+                            <!-- Kolom akan diisi oleh JavaScript -->
+                        </div>
+                    </div>
+                    
+                    <div class="pt-4 border-t border-gray-200">
+                        <div class="flex justify-end space-x-3">
+                            <button id="cancelExport" class="px-4 py-2 border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm font-medium">
+                                Cancel
+                            </button>
+                            <button id="confirmExport" class="px-4 py-2 bg-farm-500 hover:bg-farm-600 text-white text-sm font-medium">
+                                <i class="fa-solid fa-download mr-1"></i> Export Data
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Load JavaScript Files - URUTAN PENTING!  -->
+    <script src="js/sensor-config.js"></script>
+    <script src="js/websocket-client.js"></script>
+    <script src="js/raw-data.js"></script>
+</body>
+</html>

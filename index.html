@@ -1,0 +1,2273 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FarmTech Dashboard - Cattle Monitoring</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet CSS & JS untuk peta -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+            crossorigin=""></script>
+    
+    <!-- Chart.js untuk visualisasi data -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- Fonts & Icons -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        /* Custom styles */
+        :root {
+            --farm-primary: #10b981;
+            --farm-primary-dark: #059669;
+            --farm-secondary: #3b82f6;
+            --farm-warning: #f59e0b;
+            --farm-danger: #ef4444;
+        }
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+        
+        /* Animasi untuk live indicator */
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+        
+        .live-pulse {
+            animation: pulse 2s infinite;
+        }
+        
+        /* Styling untuk peta */
+        #map, #liveMap {
+            height: 100%;
+            width: 100%;
+            border-radius: 0;
+            z-index: 1;
+        }
+        
+        /* Leaflet custom */
+        .leaflet-control-zoom {
+            border: 1px solid #e2e8f0 !important;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1) !important;
+        }
+        
+        .leaflet-control-zoom a {
+            background-color: white !important;
+            color: #64748b !important;
+            border-bottom: 1px solid #e2e8f0 !important;
+        }
+        
+        .leaflet-control-zoom a:hover {
+            background-color: #f8fafc !important;
+        }
+        
+        /* Custom marker untuk sapi */
+        .cow-marker {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            border: 2px solid white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 10px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .cow-marker:hover {
+            transform: scale(1.2);
+        }
+        
+        /* Card dengan border kotak */
+        .card-outline {
+            border: 1px solid #e2e8f0;
+            border-radius: 0;
+            background-color: white;
+            transition: box-shadow 0.2s, border-color 0.2s;
+        }
+        
+        .card-outline:hover {
+            border-color: #cbd5e1;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        }
+        
+        /* Status badges */
+        .status-badge {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        /* Mobile menu */
+        .mobile-menu {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: white;
+            border-top: 1px solid #e2e8f0;
+            z-index: 100;
+            display: flex;
+            justify-content: space-around;
+            padding: 8px 0;
+        }
+        
+        .mobile-menu-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 8px 12px;
+            color: #64748b;
+            font-size: 11px;
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+        
+        .mobile-menu-item.active {
+            color: var(--farm-primary);
+        }
+        
+        /* Table styling */
+        .data-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+        
+        .data-table th {
+            background-color: #f8fafc;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.5px;
+            color: #64748b;
+            border-bottom: 1px solid #e2e8f0;
+            padding: 12px 16px;
+            text-align: left;
+        }
+        
+        .data-table td {
+            padding: 16px;
+            border-bottom: 1px solid #f1f5f9;
+            color: #334155;
+        }
+        
+        .data-table tr:hover {
+            background-color: #f8fafc;
+        }
+        
+        /* Chart container */
+        .chart-container {
+            position: relative;
+            height: 300px;
+            width: 100%;
+        }
+        
+        /* Loading overlay */
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(255, 255, 255, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            border-radius: 0;
+        }
+    </style>
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        farm: {
+                            50: '#ecfdf5',
+                            100: '#d1fae5',
+                            500: '#10b981',
+                            600: '#059669',
+                            900: '#064e3b',
+                        },
+                        status: {
+                            healthy: '#10b981',
+                            warning: '#f59e0b',
+                            critical: '#ef4444',
+                            offline: '#64748b'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-50 text-slate-800 font-sans antialiased overflow-hidden">
+
+    <!-- Main container -->
+    <div class="flex h-screen w-full">
+
+        <!-- Desktop Sidebar -->
+        <aside id="desktopSidebar" class="hidden md:flex w-64 flex-col bg-white border-r border-gray-200 h-full fixed md:relative z-20">
+            <div class="h-16 flex items-center px-6 border-b border-gray-100">
+                <i class="fa-solid fa-leaf text-farm-500 text-2xl mr-2"></i>
+                <span class="text-xl font-bold text-gray-800 tracking-tight">Farm<span class="text-farm-500">Tech</span></span>
+            </div>
+
+            <nav class="flex-1 px-3 py-6 space-y-1 overflow-y-auto">
+                <a href="#" class="nav-item flex items-center px-3 py-2.5 text-gray-600 hover:bg-gray-50 hover:text-farm-500 rounded-sm group transition-all font-medium" data-page="dashboard">
+                    <i class="fa-solid fa-chart-pie w-6 text-center mr-2"></i>
+                    Dashboard
+                </a>
+                <a href="#" class="nav-item flex items-center px-3 py-2.5 text-gray-600 hover:bg-gray-50 hover:text-farm-500 rounded-sm group transition-all font-medium" data-page="cattleList">
+                    <i class="fa-solid fa-cow w-6 text-center mr-2"></i>
+                    Daftar Sapi
+                </a>
+                <a href="#" class="nav-item flex items-center px-3 py-2.5 text-gray-600 hover:bg-gray-50 hover:text-farm-500 rounded-sm group transition-all font-medium" data-page="liveMap">
+                    <i class="fa-solid fa-map-location-dot w-6 text-center mr-2"></i>
+                    Live Map
+                </a>
+                <a href="#" class="nav-item flex items-center px-3 py-2.5 text-gray-600 hover:bg-gray-50 hover:text-farm-500 rounded-sm group transition-all font-medium" data-page="reports">
+                    <i class="fa-solid fa-file-contract w-6 text-center mr-2"></i>
+                    Reports
+                </a>
+                <div class="pt-4 pb-2">
+                    <p class="px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">System</p>
+                </div>
+                <a href="#" class="nav-item flex items-center px-3 py-2.5 text-gray-600 hover:bg-gray-50 hover:text-farm-500 rounded-sm group transition-all font-medium" data-page="alerts">
+                    <div class="relative mr-2">
+                        <i class="fa-solid fa-bell w-6 text-center"></i>
+                        <span id="alertBadge" class="absolute top-0 right-1 block h-2 w-2 rounded-full ring-2 ring-white bg-red-500"></span>
+                    </div>
+                    Alerts Center
+                </a>
+                <a href="#" class="nav-item flex items-center px-3 py-2.5 text-gray-600 hover:bg-gray-50 hover:text-farm-500 rounded-sm group transition-all font-medium" data-page="settings">
+                    <i class="fa-solid fa-gear w-6 text-center mr-2"></i>
+                    Settings
+                </a>
+            </nav>
+
+            <div class="border-t border-gray-100 p-4">
+                <div class="flex items-center">
+                    <img src="https://ui-avatars.com/api/?name=Admin+Farm&background=10b981&color=fff" alt="" class="h-9 w-9 rounded-full">
+                    <div class="ml-3">
+                        <p class="text-sm font-medium text-gray-700">Admin Peternakan</p>
+                        <p class="text-xs text-gray-500">Manager</p>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <div class="flex-1 flex flex-col h-screen overflow-hidden relative">
+            
+            <!-- Mobile Header -->
+            <header id="mobileHeader" class="md:hidden bg-white border-b border-gray-200 h-16 flex items-center justify-between px-4 z-10">
+                <div class="flex items-center">
+                    <i class="fa-solid fa-leaf text-farm-500 text-xl mr-2"></i>
+                    <span id="pageTitle" class="text-lg font-bold text-gray-800">Dashboard</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <button id="mobileAlertsBtn" class="relative text-gray-500 hover:text-gray-700 p-2">
+                        <i class="fa-solid fa-bell text-lg"></i>
+                        <span id="mobileAlertBadge" class="absolute top-1 right-1 block h-2 w-2 rounded-full ring-1 ring-white bg-red-500"></span>
+                    </button>
+                    <button id="mobileMenuBtn" class="text-gray-500 hover:text-gray-700 p-2">
+                        <i class="fa-solid fa-ellipsis-vertical text-lg"></i>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Main Content (Dynamic pages will be loaded here) -->
+            <main id="mainContent" class="flex-1 overflow-y-auto overflow-x-hidden bg-gray-50 p-4 md:p-8">
+                <!-- Dashboard page will be loaded here initially -->
+            </main>
+            
+            <!-- Mobile Navigation Menu -->
+            <div id="mobileMenu" class="mobile-menu md:hidden">
+                <a href="#" class="mobile-menu-item active" data-page="dashboard">
+                    <i class="fa-solid fa-chart-pie text-lg mb-1"></i>
+                    <span>Dashboard</span>
+                </a>
+                <a href="#" class="mobile-menu-item" data-page="cattleList">
+                    <i class="fa-solid fa-cow text-lg mb-1"></i>
+                    <span>Sapi</span>
+                </a>
+                <a href="#" class="mobile-menu-item" data-page="liveMap">
+                    <i class="fa-solid fa-map text-lg mb-1"></i>
+                    <span>Map</span>
+                </a>
+                <a href="#" class="mobile-menu-item" data-page="alerts">
+                    <div class="relative">
+                        <i class="fa-solid fa-bell text-lg mb-1"></i>
+                    </div>
+                    <span>Alerts</span>
+                </a>
+                <a href="#" class="mobile-menu-item" data-page="settings">
+                    <i class="fa-solid fa-gear text-lg mb-1"></i>
+                    <span>Settings</span>
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript Code -->
+    <script>
+        // Data dummy untuk aplikasi
+        const dummyData = {
+            cattle: [
+                {
+                    id: "001",
+                    name: "Merah",
+                    status: "healthy",
+                    age: "3 tahun",
+                    weight: "450 kg",
+                    breed: "Simmental",
+                    lastCheck: "2025-03-11T08:30:00",
+                    location: {
+                        lat: -7.7956,
+                        lng: 110.3695
+                    },
+                    vitals: {
+                        heartRate: { value: 72, unit: "bpm", status: "normal", min: 60, max: 80 },
+                        temperature: { value: 38.5, unit: "°C", status: "normal", min: 38.0, max: 39.0 },
+                        spo2: { value: 98, unit: "%", status: "normal", min: 95, max: 100 },
+                        activity: { value: "active", level: "high", status: "normal" }
+                    },
+                    lastUpdate: "2 menit lalu"
+                },
+                {
+                    id: "002",
+                    name: "Putih",
+                    status: "warning",
+                    age: "2.5 tahun",
+                    weight: "420 kg",
+                    breed: "Limosin",
+                    lastCheck: "2025-03-11T09:15:00",
+                    location: {
+                        lat: -7.7960,
+                        lng: 110.3700
+                    },
+                    vitals: {
+                        heartRate: { value: 85, unit: "bpm", status: "warning", min: 60, max: 80 },
+                        temperature: { value: 39.2, unit: "°C", status: "warning", min: 38.0, max: 39.0 },
+                        spo2: { value: 96, unit: "%", status: "normal", min: 95, max: 100 },
+                        activity: { value: "resting", level: "low", status: "warning" }
+                    },
+                    lastUpdate: "5 menit lalu"
+                },
+                {
+                    id: "003",
+                    name: "Hitam",
+                    status: "critical",
+                    age: "4 tahun",
+                    weight: "520 kg",
+                    breed: "Brahman",
+                    lastCheck: "2025-03-11T07:45:00",
+                    location: {
+                        lat: -7.7950,
+                        lng: 110.3680
+                    },
+                    vitals: {
+                        heartRate: { value: 120, unit: "bpm", status: "critical", min: 60, max: 80 },
+                        temperature: { value: 40.1, unit: "°C", status: "critical", min: 38.0, max: 39.0 },
+                        spo2: { value: 92, unit: "%", status: "warning", min: 95, max: 100 },
+                        activity: { value: "inactive", level: "very low", status: "critical" }
+                    },
+                    lastUpdate: "10 menit lalu"
+                },
+                {
+                    id: "004",
+                    name: "Coklat",
+                    status: "healthy",
+                    age: "2 tahun",
+                    weight: "380 kg",
+                    breed: "Simental",
+                    lastCheck: "2025-03-11T10:00:00",
+                    location: {
+                        lat: -7.7945,
+                        lng: 110.3710
+                    },
+                    vitals: {
+                        heartRate: { value: 68, unit: "bpm", status: "normal", min: 60, max: 80 },
+                        temperature: { value: 38.8, unit: "°C", status: "normal", min: 38.0, max: 39.0 },
+                        spo2: { value: 97, unit: "%", status: "normal", min: 95, max: 100 },
+                        activity: { value: "active", level: "medium", status: "normal" }
+                    },
+                    lastUpdate: "3 menit lalu"
+                },
+                {
+                    id: "005",
+                    name: "Biru",
+                    status: "healthy",
+                    age: "3.5 tahun",
+                    weight: "480 kg",
+                    breed: "Limosin",
+                    lastCheck: "2025-03-11T09:45:00",
+                    location: {
+                        lat: -7.7970,
+                        lng: 110.3675
+                    },
+                    vitals: {
+                        heartRate: { value: 75, unit: "bpm", status: "normal", min: 60, max: 80 },
+                        temperature: { value: 38.7, unit: "°C", status: "normal", min: 38.0, max: 39.0 },
+                        spo2: { value: 99, unit: "%", status: "normal", min: 95, max: 100 },
+                        activity: { value: "grazing", level: "medium", status: "normal" }
+                    },
+                    lastUpdate: "7 menit lalu"
+                }
+            ],
+            alerts: [
+                {
+                    id: "alert_001",
+                    cowId: "003",
+                    priority: "critical",
+                    type: "high_temperature",
+                    message: "High temperature detected: 40.1°C",
+                    timestamp: "2025-03-11T10:25:00",
+                    location: "Pasture B",
+                    handled: false
+                },
+                {
+                    id: "alert_002",
+                    cowId: "002",
+                    priority: "warning",
+                    type: "low_activity",
+                    message: "Low activity detected: Inactive for 4 hours",
+                    timestamp: "2025-03-11T09:45:00",
+                    location: "Pasture A",
+                    handled: false
+                },
+                {
+                    id: "alert_003",
+                    cowId: "012",
+                    priority: "warning",
+                    type: "abnormal_heart_rate",
+                    message: "Abnormal heart rate detected: 55 BPM",
+                    timestamp: "2025-03-11T08:30:00",
+                    location: "Barn 2",
+                    handled: true
+                }
+            ],
+            stats: {
+                totalCattle: 50,
+                healthy: 45,
+                warning: 3,
+                critical: 2,
+                offline: 0
+            },
+            recentActivity: [
+                { time: "10:30", event: "Sapi #003 dipindahkan ke area karantina", type: "move" },
+                { time: "10:15", event: "Pemberian pakan tambahan untuk sapi #002", type: "feed" },
+                { time: "09:45", event: "Pemeriksaan rutin kelompok A selesai", type: "check" },
+                { time: "09:20", event: "Sapi #012 menunjukkan aktivitas normal kembali", type: "recovery" },
+                { time: "08:50", event: "Vaksinasi untuk sapi usia < 1 tahun", type: "vaccine" }
+            ]
+        };
+
+        // State aplikasi
+        let currentPage = "dashboard";
+        let currentCowDetail = dummyData.cattle[0];
+        let maps = {}; // Untuk menyimpan instance peta
+
+        // Fungsi untuk mengubah halaman
+        function navigateTo(page) {
+            // Update current page
+            currentPage = page;
+            
+            // Update title
+            const pageTitles = {
+                dashboard: "Dashboard",
+                cattleList: "Daftar Sapi",
+                liveMap: "Live Map",
+                reports: "Reports",
+                alerts: "Alerts Center",
+                settings: "Settings"
+            };
+            
+            document.getElementById("pageTitle").textContent = pageTitles[page] || "FarmTech";
+            
+            // Update menu aktif
+            document.querySelectorAll(".nav-item").forEach(item => {
+                item.classList.remove("bg-farm-50", "text-farm-500");
+                if (item.getAttribute("data-page") === page) {
+                    item.classList.add("bg-farm-50", "text-farm-500");
+                }
+            });
+            
+            // Update mobile menu
+            document.querySelectorAll(".mobile-menu-item").forEach(item => {
+                item.classList.remove("active");
+                if (item.getAttribute("data-page") === page) {
+                    item.classList.add("active");
+                }
+            });
+            
+            // Render halaman yang sesuai
+            renderPage(page);
+        }
+
+        // Fungsi untuk merender halaman
+        function renderPage(page) {
+            const mainContent = document.getElementById("mainContent");
+            
+            switch(page) {
+                case "dashboard":
+                    mainContent.innerHTML = renderDashboard();
+                    break;
+                case "cattleList":
+                    mainContent.innerHTML = renderCattleList();
+                    break;
+                case "liveMap":
+                    mainContent.innerHTML = renderLiveMap();
+                    // Inisialisasi peta setelah konten dimuat
+                    setTimeout(initializeLiveMap, 100);
+                    break;
+                case "reports":
+                    mainContent.innerHTML = renderReports();
+                    // Inisialisasi chart setelah konten dimuat
+                    setTimeout(initializeCharts, 100);
+                    break;
+                case "alerts":
+                    mainContent.innerHTML = renderAlerts();
+                    break;
+                case "settings":
+                    mainContent.innerHTML = renderSettings();
+                    break;
+                default:
+                    mainContent.innerHTML = renderDashboard();
+            }
+            
+            // Tambahkan event listener untuk elemen yang baru dirender
+            addEventListeners();
+        }
+
+        // Fungsi untuk merender dashboard
+        function renderDashboard() {
+            const now = new Date();
+            const formattedDate = now.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+            
+            return `
+                <div class="flex flex-col md:flex-row md:items-center justify-between mb-8">
+                    <div>
+                        <h1 class="text-2xl font-bold text-gray-800">Dashboard Monitoring</h1>
+                        <p class="text-sm text-gray-500 mt-1">Real-time overview kondisi ternak hari ini.</p>
+                    </div>
+                    <div class="mt-4 md:mt-0 flex items-center space-x-3">
+                        <span class="text-sm text-gray-500 bg-white px-3 py-1.5 card-outline">
+                            <i class="fa-regular fa-calendar mr-2"></i> ${formattedDate}
+                        </span>
+                        <button id="refreshBtn" class="bg-farm-500 hover:bg-farm-600 text-white px-4 py-2 card-outline text-sm font-medium transition-colors">
+                            <i class="fa-solid fa-rotate-right mr-1"></i> Refresh Data
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Stats Cards -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+                    <div class="card-outline p-5">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Total Sapi</p>
+                                <h3 class="text-3xl font-bold text-gray-800">${dummyData.stats.totalCattle}</h3>
+                            </div>
+                            <div class="p-2 bg-blue-50 text-blue-500">
+                                <i class="fa-solid fa-cow text-lg"></i>
+                            </div>
+                        </div>
+                        <div class="mt-4 pt-3 border-t border-gray-100">
+                            <p class="text-xs text-gray-500">Semua ternak aktif</p>
+                        </div>
+                    </div>
+                    
+                    <div class="card-outline p-5">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Sehat</p>
+                                <h3 class="text-3xl font-bold text-gray-800">${dummyData.stats.healthy}</h3>
+                            </div>
+                            <div class="p-2 bg-green-50 text-green-500">
+                                <i class="fa-solid fa-heart-pulse text-lg"></i>
+                            </div>
+                        </div>
+                        <div class="mt-4 pt-3 border-t border-gray-100">
+                            <p class="text-xs text-gray-500">Kondisi vital normal</p>
+                        </div>
+                    </div>
+
+                    <div class="card-outline p-5">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Butuh Monitor</p>
+                                <h3 class="text-3xl font-bold text-gray-800">${dummyData.stats.warning}</h3>
+                            </div>
+                            <div class="p-2 bg-yellow-50 text-yellow-500">
+                                <i class="fa-solid fa-triangle-exclamation text-lg"></i>
+                            </div>
+                        </div>
+                        <div class="mt-4 pt-3 border-t border-gray-100">
+                            <p class="text-xs text-gray-500">Perlu pemeriksaan</p>
+                        </div>
+                    </div>
+
+                    <div class="card-outline p-5">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Kritis</p>
+                                <h3 class="text-3xl font-bold text-gray-800">${dummyData.stats.critical}</h3>
+                            </div>
+                            <div class="p-2 bg-red-50 text-red-500">
+                                <i class="fa-solid fa-temperature-arrow-up text-lg"></i>
+                            </div>
+                        </div>
+                        <div class="mt-4 pt-3 border-t border-gray-100">
+                            <p class="text-xs text-gray-500">Perlu tindakan segera</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Main Content Area -->
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
+                    <!-- Map Area -->
+                    <div class="lg:col-span-5 flex flex-col">
+                        <div class="card-outline flex-1 min-h-[400px] flex flex-col">
+                            <div class="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                                <h3 class="font-semibold text-gray-700">📍 Live Location</h3>
+                                <div class="flex items-center space-x-1">
+                                    <span class="live-pulse h-2.5 w-2.5 bg-farm-500 rounded-full inline-block"></span>
+                                    <span class="text-xs text-farm-500 font-medium">Live Update</span>
+                                </div>
+                            </div>
+                            <div class="relative flex-1">
+                                <div id="map" class="h-full w-full"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Cow Details -->
+                    <div class="lg:col-span-7">
+                        <div class="card-outline h-full flex flex-col">
+                            <div class="p-4 border-b border-gray-100 flex justify-between items-center">
+                                <div>
+                                    <h3 class="font-bold text-gray-800 text-lg">Detail: Sapi #${currentCowDetail.id} (${currentCowDetail.name})</h3>
+                                    <span class="status-badge ${getStatusColor(currentCowDetail.status)} mt-1">
+                                        ${getStatusText(currentCowDetail.status)}
+                                    </span>
+                                </div>
+                                <button id="viewHistoryBtn" class="text-sm text-blue-500 hover:text-blue-700 hover:underline font-medium">
+                                    Lihat History <i class="fa-solid fa-arrow-right ml-1"></i>
+                                </button>
+                            </div>
+                            
+                            <div class="p-6 grid grid-cols-1 sm:grid-cols-2 gap-4 flex-1">
+                                <!-- Heart Rate Card -->
+                                <div class="card-outline p-4 relative overflow-hidden">
+                                    <div class="absolute top-0 right-0 p-3 opacity-5">
+                                        <i class="fa-solid fa-heart-pulse text-6xl text-rose-500"></i>
+                                    </div>
+                                    <div class="flex items-center mb-2">
+                                        <div class="p-2 bg-rose-50 text-rose-500 mr-3">
+                                            <i class="fa-solid fa-heart"></i>
+                                        </div>
+                                        <span class="text-sm text-gray-500 font-medium">Heart Rate</span>
+                                    </div>
+                                    <div class="flex items-end mb-2">
+                                        <span class="text-3xl font-bold text-gray-800">${currentCowDetail.vitals.heartRate.value}</span>
+                                        <span class="text-sm text-gray-400 mb-1 ml-1">${currentCowDetail.vitals.heartRate.unit}</span>
+                                    </div>
+                                    <div class="w-full bg-gray-100 h-1.5 mb-1">
+                                        <div class="bg-rose-500 h-1.5" style="width: ${calculatePercentage(currentCowDetail.vitals.heartRate.value, currentCowDetail.vitals.heartRate.min, currentCowDetail.vitals.heartRate.max)}%"></div>
+                                    </div>
+                                    <p class="text-xs text-gray-400">Normal: ${currentCowDetail.vitals.heartRate.min}-${currentCowDetail.vitals.heartRate.max} BPM</p>
+                                </div>
+
+                                <!-- Temperature Card -->
+                                <div class="card-outline p-4 relative overflow-hidden">
+                                    <div class="absolute top-0 right-0 p-3 opacity-5">
+                                        <i class="fa-solid fa-temperature-half text-6xl text-orange-500"></i>
+                                    </div>
+                                    <div class="flex items-center mb-2">
+                                        <div class="p-2 bg-orange-50 text-orange-500 mr-3">
+                                            <i class="fa-solid fa-temperature-high"></i>
+                                        </div>
+                                        <span class="text-sm text-gray-500 font-medium">Suhu Tubuh</span>
+                                    </div>
+                                    <div class="flex items-end mb-2">
+                                        <span class="text-3xl font-bold text-gray-800">${currentCowDetail.vitals.temperature.value}</span>
+                                        <span class="text-sm text-gray-400 mb-1 ml-1">${currentCowDetail.vitals.temperature.unit}</span>
+                                    </div>
+                                    <div class="w-full bg-gray-100 h-1.5 mb-1">
+                                        <div class="bg-orange-500 h-1.5" style="width: ${calculatePercentage(currentCowDetail.vitals.temperature.value, 37, 40)}%"></div>
+                                    </div>
+                                    <p class="text-xs text-gray-400">Normal: ${currentCowDetail.vitals.temperature.min}-${currentCowDetail.vitals.temperature.max} °C</p>
+                                </div>
+
+                                <!-- SpO2 Card -->
+                                <div class="card-outline p-4 relative overflow-hidden">
+                                    <div class="absolute top-0 right-0 p-3 opacity-5">
+                                        <i class="fa-solid fa-lungs text-6xl text-sky-500"></i>
+                                    </div>
+                                    <div class="flex items-center mb-2">
+                                        <div class="p-2 bg-sky-50 text-sky-500 mr-3">
+                                            <i class="fa-solid fa-lungs"></i>
+                                        </div>
+                                        <span class="text-sm text-gray-500 font-medium">Kadar Oksigen</span>
+                                    </div>
+                                    <div class="flex items-end mb-2">
+                                        <span class="text-3xl font-bold text-gray-800">${currentCowDetail.vitals.spo2.value}</span>
+                                        <span class="text-sm text-gray-400 mb-1 ml-1">${currentCowDetail.vitals.spo2.unit}</span>
+                                    </div>
+                                    <div class="w-full bg-gray-100 h-1.5 mb-1">
+                                        <div class="bg-sky-500 h-1.5" style="width: ${currentCowDetail.vitals.spo2.value}%"></div>
+                                    </div>
+                                    <p class="text-xs text-gray-400">Kondisi optimal: >95%</p>
+                                </div>
+
+                                <!-- Activity Card -->
+                                <div class="card-outline p-4 relative overflow-hidden">
+                                    <div class="absolute top-0 right-0 p-3 opacity-5">
+                                        <i class="fa-solid fa-person-running text-6xl text-indigo-500"></i>
+                                    </div>
+                                    <div class="flex items-center mb-2">
+                                        <div class="p-2 bg-indigo-50 text-indigo-500 mr-3">
+                                            <i class="fa-solid fa-shoe-prints"></i>
+                                        </div>
+                                        <span class="text-sm text-gray-500 font-medium">Aktivitas</span>
+                                    </div>
+                                    <div class="flex items-end mb-3">
+                                        <span class="text-2xl font-bold text-indigo-600 capitalize">${currentCowDetail.vitals.activity.value}</span>
+                                        <span class="text-sm text-gray-400 mb-1 ml-1">(${currentCowDetail.vitals.activity.level})</span>
+                                    </div>
+                                    <div class="flex items-center space-x-1 mb-1">
+                                        ${generateActivityBars(currentCowDetail.vitals.activity.level)}
+                                    </div>
+                                    <p class="text-xs text-gray-400">Update: ${currentCowDetail.lastUpdate}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Alerts & Activity -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                    <!-- Recent Alerts -->
+                    <div class="card-outline">
+                        <div class="p-4 border-b border-gray-100 flex justify-between items-center">
+                            <h3 class="font-semibold text-gray-700">⚠️ Recent Alerts</h3>
+                            <button id="viewAllAlerts" class="text-xs font-medium text-farm-500 hover:text-farm-600">View All Alerts</button>
+                        </div>
+                        <div class="p-4">
+                            ${dummyData.alerts.filter(a => !a.handled).map(alert => `
+                                <div class="mb-3 p-3 border ${getAlertBorderColor(alert.priority)} bg-white">
+                                    <div class="flex justify-between items-start">
+                                        <div class="flex items-center">
+                                            <span class="${getAlertBadgeColor(alert.priority)} text-xs font-bold px-2 py-1 mr-2">${alert.priority.toUpperCase()}</span>
+                                            <span class="text-sm font-medium text-gray-800">${alert.message}</span>
+                                        </div>
+                                        <button class="text-gray-400 hover:text-gray-600" data-alert-id="${alert.id}">
+                                            <i class="fa-solid fa-check"></i>
+                                        </button>
+                                    </div>
+                                    <div class="mt-2 flex justify-between text-xs text-gray-500">
+                                        <span>Sapi #${alert.cowId} • ${alert.location}</span>
+                                        <span>${formatTime(alert.timestamp)}</span>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+
+                    <!-- Recent Activity -->
+                    <div class="card-outline">
+                        <div class="p-4 border-b border-gray-100">
+                            <h3 class="font-semibold text-gray-700">📋 Recent Activity</h3>
+                        </div>
+                        <div class="p-4">
+                            <div class="space-y-4">
+                                ${dummyData.recentActivity.map(activity => `
+                                    <div class="flex items-start">
+                                        <div class="flex-shrink-0 mt-0.5">
+                                            <div class="w-8 h-8 rounded-full ${getActivityIconColor(activity.type)} flex items-center justify-center">
+                                                <i class="fa-solid ${getActivityIcon(activity.type)} text-white text-xs"></i>
+                                            </div>
+                                        </div>
+                                        <div class="ml-3 flex-1">
+                                            <p class="text-sm text-gray-800">${activity.event}</p>
+                                            <p class="text-xs text-gray-400 mt-1">${activity.time}</p>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Fungsi untuk merender daftar sapi
+        function renderCattleList() {
+            return `
+                <div class="flex flex-col md:flex-row md:items-center justify-between mb-8">
+                    <div>
+                        <h1 class="text-2xl font-bold text-gray-800">Daftar Sapi</h1>
+                        <p class="text-sm text-gray-500 mt-1">Kelola dan pantau semua ternak anda.</p>
+                    </div>
+                    <div class="mt-4 md:mt-0 flex items-center space-x-3">
+                        <div class="relative">
+                            <input type="text" id="searchCattle" placeholder="Cari sapi..." class="pl-10 pr-4 py-2 card-outline text-sm w-full md:w-64">
+                            <i class="fa-solid fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
+                        </div>
+                        <button class="bg-farm-500 hover:bg-farm-600 text-white px-4 py-2 card-outline text-sm font-medium">
+                            <i class="fa-solid fa-plus mr-1"></i> Tambah Sapi
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Filters -->
+                <div class="flex flex-wrap gap-2 mb-6">
+                    <button class="filter-btn active px-3 py-1.5 text-sm card-outline bg-farm-50 text-farm-500 border-farm-200" data-filter="all">Semua</button>
+                    <button class="filter-btn px-3 py-1.5 text-sm card-outline text-gray-600 hover:bg-gray-50" data-filter="healthy">Sehat</button>
+                    <button class="filter-btn px-3 py-1.5 text-sm card-outline text-gray-600 hover:bg-gray-50" data-filter="warning">Butuh Monitor</button>
+                    <button class="filter-btn px-3 py-1.5 text-sm card-outline text-gray-600 hover:bg-gray-50" data-filter="critical">Kritis</button>
+                    <button class="filter-btn px-3 py-1.5 text-sm card-outline text-gray-600 hover:bg-gray-50" data-filter="offline">Offline</button>
+                </div>
+
+                <!-- Cattle Table -->
+                <div class="card-outline overflow-hidden">
+                    <div class="overflow-x-auto">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>ID Sapi</th>
+                                    <th>Nama</th>
+                                    <th>Status</th>
+                                    <th>Ras</th>
+                                    <th>Usia</th>
+                                    <th>Berat</th>
+                                    <th>Heart Rate</th>
+                                    <th>Suhu</th>
+                                    <th>Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${dummyData.cattle.map(cow => `
+                                    <tr class="cattle-row" data-status="${cow.status}">
+                                        <td class="font-medium">#${cow.id}</td>
+                                        <td class="font-medium">${cow.name}</td>
+                                        <td>
+                                            <span class="status-badge ${getStatusColor(cow.status)}">
+                                                ${getStatusText(cow.status)}
+                                            </span>
+                                        </td>
+                                        <td>${cow.breed}</td>
+                                        <td>${cow.age}</td>
+                                        <td>${cow.weight}</td>
+                                        <td>
+                                            <div class="flex items-center">
+                                                <span class="font-medium ${getVitalTextColor(cow.vitals.heartRate.status)}">${cow.vitals.heartRate.value} ${cow.vitals.heartRate.unit}</span>
+                                                <i class="fa-solid fa-heart ml-1 ${getVitalIconColor(cow.vitals.heartRate.status)} text-xs"></i>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <div class="flex items-center">
+                                                <span class="font-medium ${getVitalTextColor(cow.vitals.temperature.status)}">${cow.vitals.temperature.value} ${cow.vitals.temperature.unit}</span>
+                                                <i class="fa-solid fa-temperature-high ml-1 ${getVitalIconColor(cow.vitals.temperature.status)} text-xs"></i>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <div class="flex space-x-2">
+                                                <button class="view-cow-btn text-blue-500 hover:text-blue-700 p-1" data-cow-id="${cow.id}">
+                                                    <i class="fa-solid fa-eye"></i>
+                                                </button>
+                                                <button class="text-gray-500 hover:text-gray-700 p-1">
+                                                    <i class="fa-solid fa-chart-line"></i>
+                                                </button>
+                                                <button class="text-gray-500 hover:text-gray-700 p-1">
+                                                    <i class="fa-solid fa-location-dot"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="p-4 border-t border-gray-100 flex justify-between items-center">
+                        <div class="text-sm text-gray-500">
+                            Menampilkan ${dummyData.cattle.length} dari ${dummyData.stats.totalCattle} sapi
+                        </div>
+                        <div class="flex space-x-2">
+                            <button class="px-3 py-1 card-outline text-sm text-gray-600 hover:bg-gray-50">
+                                <i class="fa-solid fa-chevron-left"></i>
+                            </button>
+                            <button class="px-3 py-1 bg-farm-500 text-white text-sm">1</button>
+                            <button class="px-3 py-1 card-outline text-sm text-gray-600 hover:bg-gray-50">2</button>
+                            <button class="px-3 py-1 card-outline text-sm text-gray-600 hover:bg-gray-50">3</button>
+                            <button class="px-3 py-1 card-outline text-sm text-gray-600 hover:bg-gray-50">
+                                <i class="fa-solid fa-chevron-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Fungsi untuk merender live map
+        function renderLiveMap() {
+            return `
+                <div class="flex flex-col md:flex-row md:items-center justify-between mb-8">
+                    <div>
+                        <h1 class="text-2xl font-bold text-gray-800">Live Map</h1>
+                        <p class="text-sm text-gray-500 mt-1">Pantau lokasi real-time semua ternak di peta.</p>
+                    </div>
+                    <div class="mt-4 md:mt-0 flex items-center space-x-3">
+                        <div class="flex items-center space-x-2">
+                            <div class="flex items-center">
+                                <div class="w-3 h-3 bg-green-500 rounded-full mr-1"></div>
+                                <span class="text-xs text-gray-600">Sehat</span>
+                            </div>
+                            <div class="flex items-center">
+                                <div class="w-3 h-3 bg-yellow-500 rounded-full mr-1"></div>
+                                <span class="text-xs text-gray-600">Warning</span>
+                            </div>
+                            <div class="flex items-center">
+                                <div class="w-3 h-3 bg-red-500 rounded-full mr-1"></div>
+                                <span class="text-xs text-gray-600">Kritis</span>
+                            </div>
+                        </div>
+                        <button id="refreshMapBtn" class="bg-farm-500 hover:bg-farm-600 text-white px-4 py-2 card-outline text-sm font-medium">
+                            <i class="fa-solid fa-rotate-right mr-1"></i> Refresh Map
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Map Container -->
+                <div class="card-outline h-[500px] md:h-[600px] relative">
+                    <div id="liveMap" class="h-full w-full"></div>
+                    <div class="absolute top-4 left-4 z-10 bg-white p-3 card-outline shadow-sm">
+                        <div class="text-sm font-medium text-gray-700 mb-2">Legenda Status</div>
+                        <div class="space-y-1">
+                            <div class="flex items-center">
+                                <div class="w-4 h-4 bg-green-500 rounded-full mr-2"></div>
+                                <span class="text-xs text-gray-600">Sehat (${dummyData.stats.healthy})</span>
+                            </div>
+                            <div class="flex items-center">
+                                <div class="w-4 h-4 bg-yellow-500 rounded-full mr-2"></div>
+                                <span class="text-xs text-gray-600">Butuh Monitor (${dummyData.stats.warning})</span>
+                            </div>
+                            <div class="flex items-center">
+                                <div class="w-4 h-4 bg-red-500 rounded-full mr-2"></div>
+                                <span class="text-xs text-gray-600">Kritis (${dummyData.stats.critical})</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="absolute bottom-4 left-4 z-10 bg-white p-3 card-outline shadow-sm">
+                        <div class="text-sm font-medium text-gray-700">Keterangan Area</div>
+                        <div class="text-xs text-gray-500 mt-1">
+                            <div><span class="font-medium">Pasture A:</span> Area penggembalaan utama</div>
+                            <div><span class="font-medium">Pasture B:</span> Area karantina & isolasi</div>
+                            <div><span class="font-medium">Barn 1-3:</span> Kandang utama</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Cattle List on Map -->
+                <div class="mt-6">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">Sapi di Area Ini</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        ${dummyData.cattle.map(cow => `
+                            <div class="card-outline p-4 hover:border-farm-300 transition-colors">
+                                <div class="flex justify-between items-start">
+                                    <div>
+                                        <div class="flex items-center">
+                                            <span class="font-bold text-gray-800">#${cow.id}</span>
+                                            <span class="ml-2 font-medium text-gray-700">${cow.name}</span>
+                                            <span class="ml-2 status-badge ${getStatusColor(cow.status)} text-xs">
+                                                ${getStatusText(cow.status)}
+                                            </span>
+                                        </div>
+                                        <div class="mt-2 text-sm text-gray-500">
+                                            <div class="flex items-center">
+                                                <i class="fa-solid fa-location-dot text-xs mr-1"></i>
+                                                <span>Pasture ${cow.id % 2 === 0 ? 'A' : 'B'}</span>
+                                            </div>
+                                            <div class="mt-1">
+                                                <span class="text-xs bg-gray-100 px-2 py-0.5">Update: ${cow.lastUpdate}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="text-right">
+                                        <div class="text-lg font-bold ${getTemperatureColor(cow.vitals.temperature.value)}">${cow.vitals.temperature.value}°C</div>
+                                        <div class="text-xs text-gray-500 mt-1">Suhu</div>
+                                    </div>
+                                </div>
+                                <div class="mt-4 flex justify-between text-sm">
+                                    <div>
+                                        <div class="text-gray-700">HR: <span class="font-medium">${cow.vitals.heartRate.value} bpm</span></div>
+                                        <div class="text-gray-700 mt-1">SpO2: <span class="font-medium">${cow.vitals.spo2.value}%</span></div>
+                                    </div>
+                                    <button class="text-farm-500 hover:text-farm-600 text-sm font-medium">
+                                        <i class="fa-solid fa-map-pin mr-1"></i> Lacak
+                                    </button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Fungsi untuk merender reports
+        function renderReports() {
+            return `
+                <div class="flex flex-col md:flex-row md:items-center justify-between mb-8">
+                    <div>
+                        <h1 class="text-2xl font-bold text-gray-800">Reports & Analytics</h1>
+                        <p class="text-sm text-gray-500 mt-1">Analisis data historis dan laporan kesehatan ternak.</p>
+                    </div>
+                    <div class="mt-4 md:mt-0 flex items-center space-x-3">
+                        <div class="relative">
+                            <select class="pl-3 pr-8 py-2 card-outline text-sm appearance-none">
+                                <option>Minggu ini</option>
+                                <option>Bulan ini</option>
+                                <option>3 Bulan terakhir</option>
+                                <option>Tahun ini</option>
+                            </select>
+                            <i class="fa-solid fa-chevron-down absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none"></i>
+                        </div>
+                        <button class="bg-farm-500 hover:bg-farm-600 text-white px-4 py-2 card-outline text-sm font-medium">
+                            <i class="fa-solid fa-download mr-1"></i> Export PDF
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Stats Cards -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+                    <div class="card-outline p-5">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Rata-rata Suhu</p>
+                                <h3 class="text-3xl font-bold text-gray-800">38.7</h3>
+                                <span class="text-sm text-gray-500">°C</span>
+                            </div>
+                            <div class="p-2 bg-orange-50 text-orange-500">
+                                <i class="fa-solid fa-temperature-high text-lg"></i>
+                            </div>
+                        </div>
+                        <div class="mt-4 pt-3 border-t border-gray-100">
+                            <p class="text-xs text-gray-500">Dalam rentang normal</p>
+                        </div>
+                    </div>
+                    
+                    <div class="card-outline p-5">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Rata-rata Heart Rate</p>
+                                <h3 class="text-3xl font-bold text-gray-800">74</h3>
+                                <span class="text-sm text-gray-500">BPM</span>
+                            </div>
+                            <div class="p-2 bg-rose-50 text-rose-500">
+                                <i class="fa-solid fa-heart-pulse text-lg"></i>
+                            </div>
+                        </div>
+                        <div class="mt-4 pt-3 border-t border-gray-100">
+                            <p class="text-xs text-gray-500">Stabil dalam 7 hari</p>
+                        </div>
+                    </div>
+
+                    <div class="card-outline p-5">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Kasus Kritis</p>
+                                <h3 class="text-3xl font-bold text-gray-800">2</h3>
+                            </div>
+                            <div class="p-2 bg-red-50 text-red-500">
+                                <i class="fa-solid fa-triangle-exclamation text-lg"></i>
+                            </div>
+                        </div>
+                        <div class="mt-4 pt-3 border-t border-gray-100">
+                            <p class="text-xs text-gray-500">Dalam 30 hari terakhir</p>
+                        </div>
+                    </div>
+
+                    <div class="card-outline p-5">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Tindakan Medis</p>
+                                <h3 class="text-3xl font-bold text-gray-800">8</h3>
+                            </div>
+                            <div class="p-2 bg-blue-50 text-blue-500">
+                                <i class="fa-solid fa-syringe text-lg"></i>
+                            </div>
+                        </div>
+                        <div class="mt-4 pt-3 border-t border-gray-100">
+                            <p class="text-xs text-gray-500">Vaksinasi & perawatan</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Charts -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                    <!-- Temperature Trend -->
+                    <div class="card-outline">
+                        <div class="p-4 border-b border-gray-100">
+                            <h3 class="font-semibold text-gray-700">📈 Temperature Trend (7 Hari)</h3>
+                        </div>
+                        <div class="p-4">
+                            <div class="chart-container">
+                                <canvas id="temperatureChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Health Status Distribution -->
+                    <div class="card-outline">
+                        <div class="p-4 border-b border-gray-100">
+                            <h3 class="font-semibold text-gray-700">📊 Distribusi Status Kesehatan</h3>
+                        </div>
+                        <div class="p-4">
+                            <div class="chart-container">
+                                <canvas id="healthChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Report List -->
+                <div class="card-outline">
+                    <div class="p-4 border-b border-gray-100 flex justify-between items-center">
+                        <h3 class="font-semibold text-gray-700">📋 Laporan Tersedia</h3>
+                        <button class="text-sm text-farm-500 hover:text-farm-600 font-medium">
+                            <i class="fa-solid fa-plus mr-1"></i> Buat Laporan Baru
+                        </button>
+                    </div>
+                    <div class="p-4">
+                        <div class="space-y-4">
+                            <div class="flex items-center justify-between p-3 card-outline hover:border-farm-300 transition-colors">
+                                <div class="flex items-center">
+                                    <div class="p-2 bg-blue-50 text-blue-500 mr-3">
+                                        <i class="fa-solid fa-file-medical"></i>
+                                    </div>
+                                    <div>
+                                        <h4 class="font-medium text-gray-800">Laporan Kesehatan Bulanan - Maret 2025</h4>
+                                        <p class="text-sm text-gray-500 mt-1">Analisis komprehensif kondisi kesehatan seluruh ternak</p>
+                                    </div>
+                                </div>
+                                <div class="flex items-center space-x-2">
+                                    <span class="text-xs text-gray-500">11 Mar 2025</span>
+                                    <button class="text-blue-500 hover:text-blue-700 p-1">
+                                        <i class="fa-solid fa-download"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div class="flex items-center justify-between p-3 card-outline hover:border-farm-300 transition-colors">
+                                <div class="flex items-center">
+                                    <div class="p-2 bg-green-50 text-green-500 mr-3">
+                                        <i class="fa-solid fa-weight-scale"></i>
+                                    </div>
+                                    <div>
+                                        <h4 class="font-medium text-gray-800">Laporan Pertambahan Berat - Q1 2025</h4>
+                                        <p class="text-sm text-gray-500 mt-1">Monitoring perkembangan berat ternak muda</p>
+                                    </div>
+                                </div>
+                                <div class="flex items-center space-x-2">
+                                    <span class="text-xs text-gray-500">5 Mar 2025</span>
+                                    <button class="text-blue-500 hover:text-blue-700 p-1">
+                                        <i class="fa-solid fa-download"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div class="flex items-center justify-between p-3 card-outline hover:border-farm-300 transition-colors">
+                                <div class="flex items-center">
+                                    <div class="p-2 bg-purple-50 text-purple-500 mr-3">
+                                        <i class="fa-solid fa-syringe"></i>
+                                    </div>
+                                    <div>
+                                        <h4 class="font-medium text-gray-800">Laporan Vaksinasi & Perawatan</h4>
+                                        <p class="text-sm text-gray-500 mt-1">Catatan vaksinasi dan perawatan medis ternak</p>
+                                    </div>
+                                </div>
+                                <div class="flex items-center space-x-2">
+                                    <span class="text-xs text-gray-500">28 Feb 2025</span>
+                                    <button class="text-blue-500 hover:text-blue-700 p-1">
+                                        <i class="fa-solid fa-download"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Fungsi untuk merender alerts center
+        function renderAlerts() {
+            const unhandledAlerts = dummyData.alerts.filter(a => !a.handled);
+            const handledAlerts = dummyData.alerts.filter(a => a.handled);
+            
+            return `
+                <div class="flex flex-col md:flex-row md:items-center justify-between mb-8">
+                    <div>
+                        <h1 class="text-2xl font-bold text-gray-800">Alerts Center</h1>
+                        <p class="text-sm text-gray-500 mt-1">Kelola notifikasi dan peringatan sistem.</p>
+                    </div>
+                    <div class="mt-4 md:mt-0 flex items-center space-x-3">
+                        <button id="markAllRead" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 card-outline text-sm font-medium">
+                            <i class="fa-solid fa-check-double mr-1"></i> Tandai Semua Telah Dibaca
+                        </button>
+                        <button class="bg-farm-500 hover:bg-farm-600 text-white px-4 py-2 card-outline text-sm font-medium">
+                            <i class="fa-solid fa-gear mr-1"></i> Atur Notifikasi
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Alert Stats -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+                    <div class="card-outline p-5">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Total Alerts</p>
+                                <h3 class="text-3xl font-bold text-gray-800">${dummyData.alerts.length}</h3>
+                            </div>
+                            <div class="p-2 bg-gray-100 text-gray-500">
+                                <i class="fa-solid fa-bell text-lg"></i>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="card-outline p-5">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Belum Ditangani</p>
+                                <h3 class="text-3xl font-bold text-gray-800">${unhandledAlerts.length}</h3>
+                            </div>
+                            <div class="p-2 bg-red-50 text-red-500">
+                                <i class="fa-solid fa-triangle-exclamation text-lg"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card-outline p-5">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Critical</p>
+                                <h3 class="text-3xl font-bold text-gray-800">${dummyData.alerts.filter(a => a.priority === 'critical').length}</h3>
+                            </div>
+                            <div class="p-2 bg-red-50 text-red-500">
+                                <i class="fa-solid fa-fire text-lg"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card-outline p-5">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Telah Ditangani</p>
+                                <h3 class="text-3xl font-bold text-gray-800">${handledAlerts.length}</h3>
+                            </div>
+                            <div class="p-2 bg-green-50 text-green-500">
+                                <i class="fa-solid fa-check-circle text-lg"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Alert Tabs -->
+                <div class="mb-6 border-b border-gray-200">
+                    <div class="flex space-x-4">
+                        <button class="alert-tab active px-1 py-3 text-sm font-medium text-gray-800 border-b-2 border-farm-500">Belum Ditangani (${unhandledAlerts.length})</button>
+                        <button class="alert-tab px-1 py-3 text-sm font-medium text-gray-500 hover:text-gray-700">Telah Ditangani (${handledAlerts.length})</button>
+                        <button class="alert-tab px-1 py-3 text-sm font-medium text-gray-500 hover:text-gray-700">Riwayat Alert</button>
+                    </div>
+                </div>
+
+                <!-- Unhandled Alerts -->
+                <div id="unhandledAlerts" class="space-y-4 mb-8">
+                    ${unhandledAlerts.map(alert => `
+                        <div class="card-outline border ${getAlertBorderColor(alert.priority)} overflow-hidden">
+                            <div class="p-4 flex justify-between items-start">
+                                <div class="flex items-start">
+                                    <div class="p-2 ${getAlertIconBgColor(alert.priority)} text-white rounded mr-3">
+                                        <i class="fa-solid ${getAlertIcon(alert.priority)}"></i>
+                                    </div>
+                                    <div>
+                                        <div class="flex items-center">
+                                            <span class="${getAlertTextColor(alert.priority)} font-bold mr-2">${alert.priority.toUpperCase()}</span>
+                                            <span class="text-sm font-medium text-gray-800">${alert.message}</span>
+                                        </div>
+                                        <div class="mt-2 text-sm text-gray-600">
+                                            <div class="flex flex-wrap gap-2">
+                                                <span><i class="fa-solid fa-cow mr-1"></i> Sapi #${alert.cowId}</span>
+                                                <span><i class="fa-solid fa-location-dot mr-1"></i> ${alert.location}</span>
+                                                <span><i class="fa-regular fa-clock mr-1"></i> ${formatTime(alert.timestamp)}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="flex space-x-2">
+                                    <button class="mark-handled-btn text-green-500 hover:text-green-700 p-1" data-alert-id="${alert.id}">
+                                        <i class="fa-solid fa-check"></i>
+                                    </button>
+                                    <button class="text-blue-500 hover:text-blue-700 p-1">
+                                        <i class="fa-solid fa-eye"></i>
+                                    </button>
+                                    <button class="text-gray-400 hover:text-gray-600 p-1">
+                                        <i class="fa-solid fa-ellipsis-vertical"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="px-4 py-3 bg-gray-50 border-t border-gray-100">
+                                <div class="flex justify-between items-center">
+                                    <div class="text-sm text-gray-500">
+                                        Alert ID: ${alert.id} • Type: ${alert.type.replace('_', ' ')}
+                                    </div>
+                                    <button class="text-sm bg-farm-500 hover:bg-farm-600 text-white px-3 py-1 card-outline font-medium">
+                                        Tindakan
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+
+                <!-- Alert Settings -->
+                <div class="card-outline">
+                    <div class="p-4 border-b border-gray-100">
+                        <h3 class="font-semibold text-gray-700">⚙️ Pengaturan Notifikasi</h3>
+                    </div>
+                    <div class="p-4">
+                        <div class="space-y-4">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <h4 class="font-medium text-gray-800">Notifikasi Email</h4>
+                                    <p class="text-sm text-gray-500 mt-1">Kirim alert ke email admin</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" class="sr-only peer" checked>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-farm-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-farm-500"></div>
+                                </label>
+                            </div>
+                            
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <h4 class="font-medium text-gray-800">Notifikasi SMS</h4>
+                                    <p class="text-sm text-gray-500 mt-1">Kirim alert penting via SMS</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" class="sr-only peer" checked>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-farm-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-farm-500"></div>
+                                </label>
+                            </div>
+                            
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <h4 class="font-medium text-gray-800">Alert Critical</h4>
+                                    <p class="text-sm text-gray-500 mt-1">Notifikasi untuk kondisi kritis</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" class="sr-only peer" checked>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-farm-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-farm-500"></div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Fungsi untuk merender settings
+        function renderSettings() {
+            return `
+                <div class="flex flex-col md:flex-row md:items-center justify-between mb-8">
+                    <div>
+                        <h1 class="text-2xl font-bold text-gray-800">Settings</h1>
+                        <p class="text-sm text-gray-500 mt-1">Konfigurasi sistem dan pengaturan akun.</p>
+                    </div>
+                    <div class="mt-4 md:mt-0">
+                        <button class="bg-farm-500 hover:bg-farm-600 text-white px-4 py-2 card-outline text-sm font-medium">
+                            <i class="fa-solid fa-floppy-disk mr-1"></i> Simpan Perubahan
+                        </button>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- Left Column -->
+                    <div class="lg:col-span-2 space-y-6">
+                        <!-- General Settings -->
+                        <div class="card-outline">
+                            <div class="p-4 border-b border-gray-100">
+                                <h3 class="font-semibold text-gray-700">⚙️ Pengaturan Umum</h3>
+                            </div>
+                            <div class="p-4 space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Nama Peternakan</label>
+                                    <input type="text" value="Peternakan Maju Jaya" class="w-full px-3 py-2 card-outline text-sm">
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Alamat</label>
+                                    <textarea class="w-full px-3 py-2 card-outline text-sm" rows="3">Jl. Raya Pertanian No. 123, Desa Makmur, Kecamatan Sejahtera</textarea>
+                                </div>
+                                
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">Zona Waktu</label>
+                                        <select class="w-full px-3 py-2 card-outline text-sm">
+                                            <option>WIB (UTC+7)</option>
+                                            <option>WITA (UTC+8)</option>
+                                            <option>WIT (UTC+9)</option>
+                                        </select>
+                                    </div>
+                                    
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">Satuan Suhu</label>
+                                        <select class="w-full px-3 py-2 card-outline text-sm">
+                                            <option>Celsius (°C)</option>
+                                            <option>Fahrenheit (°F)</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Threshold Settings -->
+                        <div class="card-outline">
+                            <div class="p-4 border-b border-gray-100">
+                                <h3 class="font-semibold text-gray-700">📊 Pengaturan Threshold</h3>
+                                <p class="text-sm text-gray-500 mt-1">Atur batasan normal untuk monitoring</p>
+                            </div>
+                            <div class="p-4 space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Suhu Normal (°C)</label>
+                                    <div class="flex items-center space-x-2">
+                                        <input type="number" value="38.0" class="w-24 px-3 py-2 card-outline text-sm">
+                                        <span class="text-gray-500">sampai</span>
+                                        <input type="number" value="39.0" class="w-24 px-3 py-2 card-outline text-sm">
+                                    </div>
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Heart Rate Normal (BPM)</label>
+                                    <div class="flex items-center space-x-2">
+                                        <input type="number" value="60" class="w-24 px-3 py-2 card-outline text-sm">
+                                        <span class="text-gray-500">sampai</span>
+                                        <input type="number" value="80" class="w-24 px-3 py-2 card-outline text-sm">
+                                    </div>
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">SpO2 Normal (%)</label>
+                                    <div class="flex items-center space-x-2">
+                                        <input type="number" value="95" class="w-24 px-3 py-2 card-outline text-sm">
+                                        <span class="text-gray-500">sampai</span>
+                                        <input type="number" value="100" class="w-24 px-3 py-2 card-outline text-sm">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column -->
+                    <div class="space-y-6">
+                        <!-- Account Settings -->
+                        <div class="card-outline">
+                            <div class="p-4 border-b border-gray-100">
+                                <h3 class="font-semibold text-gray-700">👤 Akun Admin</h3>
+                            </div>
+                            <div class="p-4">
+                                <div class="flex items-center mb-4">
+                                    <img src="https://ui-avatars.com/api/?name=Admin+Farm&background=10b981&color=fff" alt="" class="h-12 w-12 rounded-full">
+                                    <div class="ml-3">
+                                        <p class="font-medium text-gray-800">Admin Peternakan</p>
+                                        <p class="text-sm text-gray-500">admin@farmtech.id</p>
+                                    </div>
+                                </div>
+                                
+                                <div class="space-y-3">
+                                    <button class="w-full text-left px-3 py-2 text-sm card-outline text-gray-600 hover:bg-gray-50">
+                                        <i class="fa-solid fa-user mr-2"></i> Edit Profil
+                                    </button>
+                                    
+                                    <button class="w-full text-left px-3 py-2 text-sm card-outline text-gray-600 hover:bg-gray-50">
+                                        <i class="fa-solid fa-lock mr-2"></i> Ubah Password
+                                    </button>
+                                    
+                                    <button class="w-full text-left px-3 py-2 text-sm card-outline text-gray-600 hover:bg-gray-50">
+                                        <i class="fa-solid fa-bell mr-2"></i> Notifikasi Akun
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- System Info -->
+                        <div class="card-outline">
+                            <div class="p-4 border-b border-gray-100">
+                                <h3 class="font-semibold text-gray-700">ℹ️ Informasi Sistem</h3>
+                            </div>
+                            <div class="p-4">
+                                <div class="space-y-3">
+                                    <div class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Versi Aplikasi</span>
+                                        <span class="text-sm font-medium">v2.1.0</span>
+                                    </div>
+                                    
+                                    <div class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Jumlah Perangkat</span>
+                                        <span class="text-sm font-medium">${dummyData.stats.totalCattle}</span>
+                                    </div>
+                                    
+                                    <div class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Status Server</span>
+                                        <span class="text-sm font-medium text-green-500">Online</span>
+                                    </div>
+                                    
+                                    <div class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Update Terakhir</span>
+                                        <span class="text-sm font-medium">11 Mar 2025</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="mt-6 pt-4 border-t border-gray-100">
+                                    <button class="w-full text-center px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 card-outline">
+                                        <i class="fa-solid fa-rotate mr-1"></i> Periksa Update
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Danger Zone -->
+                        <div class="card-outline border-red-200">
+                            <div class="p-4 border-b border-red-200 bg-red-50">
+                                <h3 class="font-semibold text-red-700">⚠️ Zona Berbahaya</h3>
+                            </div>
+                            <div class="p-4">
+                                <p class="text-sm text-gray-600 mb-4">Tindakan ini tidak dapat dibatalkan. Hanya lakukan jika Anda yakin.</p>
+                                
+                                <div class="space-y-2">
+                                    <button class="w-full text-left px-3 py-2 text-sm card-outline border-red-200 text-red-600 hover:bg-red-50">
+                                        <i class="fa-solid fa-trash mr-2"></i> Hapus Data Historis
+                                    </button>
+                                    
+                                    <button class="w-full text-left px-3 py-2 text-sm card-outline border-red-200 text-red-600 hover:bg-red-50">
+                                        <i class="fa-solid fa-power-off mr-2"></i> Reset Sistem
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Fungsi untuk inisialisasi peta dashboard
+        function initializeDashboardMap() {
+            if (maps.dashboard) {
+                maps.dashboard.remove();
+            }
+            
+            // Koordinat untuk peternakan (contoh: Yogyakarta)
+            const farmLocation = [-7.7956, 110.3695];
+            
+            // Inisialisasi peta
+            maps.dashboard = L.map('map').setView(farmLocation, 16);
+            
+            // Tambahkan tile layer dari OpenStreetMap
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors',
+                maxZoom: 19
+            }).addTo(maps.dashboard);
+            
+            // Tambahkan marker untuk setiap sapi
+            dummyData.cattle.forEach(cow => {
+                const markerColor = getStatusColorHex(cow.status);
+                
+                // Buat custom marker
+                const marker = L.marker(cow.location, {
+                    icon: L.divIcon({
+                        className: 'cow-marker',
+                        html: `<div style="background-color: ${markerColor};"><i class="fa-solid fa-cow"></i></div>`,
+                        iconSize: [24, 24]
+                    }),
+                    title: `Sapi #${cow.id} (${cow.name})`
+                }).addTo(maps.dashboard);
+                
+                // Tambahkan popup
+                marker.bindPopup(`
+                    <div class="p-2">
+                        <div class="font-bold text-gray-800">Sapi #${cow.id}</div>
+                        <div class="text-sm text-gray-600">Nama: ${cow.name}</div>
+                        <div class="text-sm text-gray-600">Status: <span class="font-medium ${getStatusTextColor(cow.status)}">${getStatusText(cow.status)}</span></div>
+                        <div class="text-sm text-gray-600 mt-1">Suhu: ${cow.vitals.temperature.value}°C</div>
+                        <div class="text-sm text-gray-600">HR: ${cow.vitals.heartRate.value} bpm</div>
+                        <div class="mt-2 text-xs text-gray-500">Update: ${cow.lastUpdate}</div>
+                    </div>
+                `);
+                
+                // Tambahkan event untuk menampilkan detail sapi
+                marker.on('click', function() {
+                    currentCowDetail = cow;
+                    navigateTo('dashboard');
+                });
+            });
+            
+            // Tambahkan area peternakan
+            const farmBounds = [
+                [-7.7960, 110.3680],
+                [-7.7940, 110.3720]
+            ];
+            
+            L.rectangle(farmBounds, {
+                color: '#10b981',
+                fillColor: '#10b981',
+                fillOpacity: 0.1,
+                weight: 2
+            }).addTo(maps.dashboard).bindPopup('Area Peternakan Utama');
+            
+            // Tambahkan kontrol zoom
+            L.control.zoom({
+                position: 'topright'
+            }).addTo(maps.dashboard);
+        }
+
+        // Fungsi untuk inisialisasi peta live
+        function initializeLiveMap() {
+            if (maps.live) {
+                maps.live.remove();
+            }
+            
+            // Koordinat untuk peternakan
+            const farmLocation = [-7.7956, 110.3695];
+            
+            // Inisialisasi peta
+            maps.live = L.map('liveMap').setView(farmLocation, 16);
+            
+            // Tambahkan tile layer dari OpenStreetMap
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors',
+                maxZoom: 19
+            }).addTo(maps.live);
+            
+            // Tambahkan marker untuk setiap sapi dengan warna berbeda berdasarkan status
+            dummyData.cattle.forEach(cow => {
+                const markerColor = getStatusColorHex(cow.status);
+                
+                // Buat custom marker dengan animasi untuk status kritis
+                const markerOptions = {
+                    icon: L.divIcon({
+                        className: 'cow-marker',
+                        html: cow.status === 'critical' 
+                            ? `<div style="background-color: ${markerColor};"><i class="fa-solid fa-exclamation"></i></div>`
+                            : `<div style="background-color: ${markerColor};"><i class="fa-solid fa-cow"></i></div>`,
+                        iconSize: [28, 28]
+                    }),
+                    title: `Sapi #${cow.id} (${cow.name})`
+                };
+                
+                const marker = L.marker(cow.location, markerOptions).addTo(maps.live);
+                
+                // Tambahkan circle untuk status kritis
+                if (cow.status === 'critical') {
+                    L.circle(cow.location, {
+                        color: '#ef4444',
+                        fillColor: '#ef4444',
+                        fillOpacity: 0.1,
+                        radius: 50
+                    }).addTo(maps.live);
+                }
+                
+                // Tambahkan popup detail
+                marker.bindPopup(`
+                    <div class="p-3 min-w-[200px]">
+                        <div class="flex justify-between items-start mb-2">
+                            <div>
+                                <div class="font-bold text-gray-800">Sapi #${cow.id}</div>
+                                <div class="text-sm font-medium text-gray-600">${cow.name}</div>
+                            </div>
+                            <span class="status-badge ${getStatusColor(cow.status)}">${getStatusText(cow.status)}</span>
+                        </div>
+                        <div class="space-y-1 text-sm text-gray-600">
+                            <div class="flex justify-between">
+                                <span>Suhu:</span>
+                                <span class="font-medium ${getTemperatureColor(cow.vitals.temperature.value)}">${cow.vitals.temperature.value}°C</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span>Heart Rate:</span>
+                                <span class="font-medium">${cow.vitals.heartRate.value} bpm</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span>SpO2:</span>
+                                <span class="font-medium">${cow.vitals.spo2.value}%</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span>Aktivitas:</span>
+                                <span class="font-medium capitalize">${cow.vitals.activity.value}</span>
+                            </div>
+                        </div>
+                        <div class="mt-3 pt-2 border-t border-gray-200">
+                            <div class="text-xs text-gray-500">Lokasi: Pasture ${cow.id % 2 === 0 ? 'A' : 'B'}</div>
+                            <div class="text-xs text-gray-500">Update: ${cow.lastUpdate}</div>
+                        </div>
+                    </div>
+                `);
+            });
+            
+            // Tambahkan area peternakan
+            const farmBounds = [
+                [-7.7960, 110.3680],
+                [-7.7940, 110.3720]
+            ];
+            
+            const farmArea = L.rectangle(farmBounds, {
+                color: '#10b981',
+                fillColor: '#10b981',
+                fillOpacity: 0.05,
+                weight: 2,
+                dashArray: '5, 5'
+            }).addTo(maps.live);
+            
+            farmArea.bindPopup('Area Peternakan Utama<br>Luas: ~4 hektar');
+            
+            // Tambahkan area khusus
+            const pastureABounds = [
+                [-7.7958, 110.3690],
+                [-7.7945, 110.3705]
+            ];
+            
+            L.rectangle(pastureABounds, {
+                color: '#3b82f6',
+                fillColor: '#3b82f6',
+                fillOpacity: 0.1,
+                weight: 1
+            }).addTo(maps.live).bindPopup('Pasture A: Area penggembalaan utama');
+            
+            const pastureBBounds = [
+                [-7.7965, 110.3675],
+                [-7.7955, 110.3685]
+            ];
+            
+            L.rectangle(pastureBBounds, {
+                color: '#f59e0b',
+                fillColor: '#f59e0b',
+                fillOpacity: 0.1,
+                weight: 1
+            }).addTo(maps.live).bindPopup('Pasture B: Area karantina');
+            
+            // Tambahkan kontrol zoom
+            L.control.zoom({
+                position: 'topright'
+            }).addTo(maps.live);
+            
+            // Tambahkan kontrol skala
+            L.control.scale({
+                imperial: false,
+                position: 'bottomleft'
+            }).addTo(maps.live);
+        }
+
+        // Fungsi untuk inisialisasi charts
+        function initializeCharts() {
+            // Temperature Chart
+            const tempCtx = document.getElementById('temperatureChart');
+            if (tempCtx) {
+                new Chart(tempCtx, {
+                    type: 'line',
+                    data: {
+                        labels: ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'],
+                        datasets: [{
+                            label: 'Rata-rata Suhu (°C)',
+                            data: [38.5, 38.7, 38.9, 38.6, 38.8, 39.0, 38.7],
+                            borderColor: '#f59e0b',
+                            backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: false
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: false,
+                                min: 38,
+                                max: 40,
+                                grid: {
+                                    color: 'rgba(0, 0, 0, 0.05)'
+                                }
+                            },
+                            x: {
+                                grid: {
+                                    display: false
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            
+            // Health Chart
+            const healthCtx = document.getElementById('healthChart');
+            if (healthCtx) {
+                new Chart(healthCtx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Sehat', 'Butuh Monitor', 'Kritis', 'Offline'],
+                        datasets: [{
+                            data: [dummyData.stats.healthy, dummyData.stats.warning, dummyData.stats.critical, dummyData.stats.offline],
+                            backgroundColor: [
+                                '#10b981',
+                                '#f59e0b',
+                                '#ef4444',
+                                '#64748b'
+                            ],
+                            borderWidth: 1,
+                            borderColor: '#fff'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        cutout: '70%',
+                        plugins: {
+                            legend: {
+                                position: 'bottom'
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+        // Fungsi utilitas
+        function getStatusColor(status) {
+            const colors = {
+                healthy: 'bg-green-100 text-green-800 border border-green-200',
+                warning: 'bg-yellow-100 text-yellow-800 border border-yellow-200',
+                critical: 'bg-red-100 text-red-800 border border-red-200',
+                offline: 'bg-gray-100 text-gray-800 border border-gray-200'
+            };
+            return colors[status] || colors.offline;
+        }
+        
+        function getStatusColorHex(status) {
+            const colors = {
+                healthy: '#10b981',
+                warning: '#f59e0b',
+                critical: '#ef4444',
+                offline: '#64748b'
+            };
+            return colors[status] || colors.offline;
+        }
+        
+        function getStatusText(status) {
+            const texts = {
+                healthy: 'Sehat',
+                warning: 'Butuh Monitor',
+                critical: 'Kritis',
+                offline: 'Offline'
+            };
+            return texts[status] || 'Unknown';
+        }
+        
+        function getStatusTextColor(status) {
+            const colors = {
+                healthy: 'text-green-600',
+                warning: 'text-yellow-600',
+                critical: 'text-red-600',
+                offline: 'text-gray-600'
+            };
+            return colors[status] || 'text-gray-600';
+        }
+        
+        function getVitalTextColor(status) {
+            const colors = {
+                normal: 'text-gray-800',
+                warning: 'text-yellow-600',
+                critical: 'text-red-600'
+            };
+            return colors[status] || 'text-gray-800';
+        }
+        
+        function getVitalIconColor(status) {
+            const colors = {
+                normal: 'text-green-500',
+                warning: 'text-yellow-500',
+                critical: 'text-red-500'
+            };
+            return colors[status] || 'text-gray-500';
+        }
+        
+        function calculatePercentage(value, min, max) {
+            const range = max - min;
+            const position = value - min;
+            return Math.min(100, Math.max(0, (position / range) * 100));
+        }
+        
+        function generateActivityBars(level) {
+            const levels = {
+                'very low': [1, 2, 1, 3, 1],
+                'low': [2, 3, 2, 4, 2],
+                'medium': [4, 5, 3, 6, 4],
+                'high': [6, 7, 5, 8, 6],
+                'very high': [8, 9, 7, 10, 8]
+            };
+            
+            const heights = levels[level] || [3, 4, 2, 5, 3];
+            
+            return heights.map(height => `
+                <div class="h-${height} w-1 bg-indigo-500 rounded"></div>
+            `).join('');
+        }
+        
+        function getAlertBorderColor(priority) {
+            const colors = {
+                critical: 'border-red-300',
+                warning: 'border-yellow-300',
+                info: 'border-blue-300'
+            };
+            return colors[priority] || 'border-gray-300';
+        }
+        
+        function getAlertBadgeColor(priority) {
+            const colors = {
+                critical: 'bg-red-100 text-red-700 border border-red-200',
+                warning: 'bg-yellow-100 text-yellow-700 border border-yellow-200',
+                info: 'bg-blue-100 text-blue-700 border border-blue-200'
+            };
+            return colors[priority] || 'bg-gray-100 text-gray-700';
+        }
+        
+        function getAlertIconBgColor(priority) {
+            const colors = {
+                critical: 'bg-red-500',
+                warning: 'bg-yellow-500',
+                info: 'bg-blue-500'
+            };
+            return colors[priority] || 'bg-gray-500';
+        }
+        
+        function getAlertTextColor(priority) {
+            const colors = {
+                critical: 'text-red-600',
+                warning: 'text-yellow-600',
+                info: 'text-blue-600'
+            };
+            return colors[priority] || 'text-gray-600';
+        }
+        
+        function getAlertIcon(priority) {
+            const icons = {
+                critical: 'fa-fire',
+                warning: 'fa-triangle-exclamation',
+                info: 'fa-circle-info'
+            };
+            return icons[priority] || 'fa-bell';
+        }
+        
+        function formatTime(timestamp) {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diffMs = now - date;
+            const diffMins = Math.floor(diffMs / 60000);
+            const diffHours = Math.floor(diffMs / 3600000);
+            
+            if (diffMins < 1) return 'Baru saja';
+            if (diffMins < 60) return `${diffMins} menit lalu`;
+            if (diffHours < 24) return `${diffHours} jam lalu`;
+            
+            return date.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+        }
+        
+        function getActivityIcon(type) {
+            const icons = {
+                move: 'fa-truck-fast',
+                feed: 'fa-wheat-awn',
+                check: 'fa-stethoscope',
+                recovery: 'fa-heart-circle-check',
+                vaccine: 'fa-syringe'
+            };
+            return icons[type] || 'fa-circle';
+        }
+        
+        function getActivityIconColor(type) {
+            const colors = {
+                move: 'bg-blue-500',
+                feed: 'bg-green-500',
+                check: 'bg-purple-500',
+                recovery: 'bg-teal-500',
+                vaccine: 'bg-indigo-500'
+            };
+            return colors[type] || 'bg-gray-500';
+        }
+        
+        function getTemperatureColor(temp) {
+            if (temp >= 40) return 'text-red-600';
+            if (temp >= 39.5) return 'text-orange-600';
+            if (temp >= 39) return 'text-yellow-600';
+            if (temp >= 38) return 'text-green-600';
+            return 'text-blue-600';
+        }
+
+        // Fungsi untuk menambahkan event listeners
+        function addEventListeners() {
+            // Navigation
+            document.querySelectorAll('.nav-item, .mobile-menu-item').forEach(item => {
+                item.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const page = this.getAttribute('data-page');
+                    navigateTo(page);
+                });
+            });
+            
+            // Mobile menu button
+            document.getElementById('mobileMenuBtn')?.addEventListener('click', function() {
+                alert('Menu mobile diperluas (dalam implementasi nyata, ini akan menampilkan menu lebih banyak)');
+            });
+            
+            // Mobile alerts button
+            document.getElementById('mobileAlertsBtn')?.addEventListener('click', function() {
+                navigateTo('alerts');
+            });
+            
+            // Refresh button
+            document.getElementById('refreshBtn')?.addEventListener('click', function() {
+                this.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> Refreshing...';
+                setTimeout(() => {
+                    this.innerHTML = '<i class="fa-solid fa-rotate-right mr-1"></i> Refresh Data';
+                    alert('Data telah diperbarui!');
+                }, 1000);
+            });
+            
+            // Refresh map button
+            document.getElementById('refreshMapBtn')?.addEventListener('click', function() {
+                if (maps.live) {
+                    maps.live.setView([-7.7956, 110.3695], 16);
+                    alert('Peta telah direfresh!');
+                }
+            });
+            
+            // View history button
+            document.getElementById('viewHistoryBtn')?.addEventListener('click', function() {
+                navigateTo('reports');
+            });
+            
+            // View all alerts button
+            document.getElementById('viewAllAlerts')?.addEventListener('click', function(e) {
+                e.preventDefault();
+                navigateTo('alerts');
+            });
+            
+            // Mark all as read button
+            document.getElementById('markAllRead')?.addEventListener('click', function() {
+                if (confirm('Tandai semua alert sebagai telah dibaca?')) {
+                    dummyData.alerts.forEach(alert => alert.handled = true);
+                    navigateTo('alerts');
+                }
+            });
+            
+            // Mark individual alert as handled
+            document.querySelectorAll('.mark-handled-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const alertId = this.getAttribute('data-alert-id');
+                    const alert = dummyData.alerts.find(a => a.id === alertId);
+                    if (alert) {
+                        alert.handled = true;
+                        navigateTo('alerts');
+                    }
+                });
+            });
+            
+            // Filter buttons in cattle list
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    // Remove active class from all buttons
+                    document.querySelectorAll('.filter-btn').forEach(b => {
+                        b.classList.remove('active', 'bg-farm-50', 'text-farm-500', 'border-farm-200');
+                        b.classList.add('text-gray-600', 'hover:bg-gray-50');
+                    });
+                    
+                    // Add active class to clicked button
+                    this.classList.add('active', 'bg-farm-50', 'text-farm-500', 'border-farm-200');
+                    this.classList.remove('text-gray-600', 'hover:bg-gray-50');
+                    
+                    const filter = this.getAttribute('data-filter');
+                    
+                    // Filter table rows
+                    document.querySelectorAll('.cattle-row').forEach(row => {
+                        if (filter === 'all' || row.getAttribute('data-status') === filter) {
+                            row.style.display = '';
+                        } else {
+                            row.style.display = 'none';
+                        }
+                    });
+                });
+            });
+            
+            // View cow button in cattle list
+            document.querySelectorAll('.view-cow-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const cowId = this.getAttribute('data-cow-id');
+                    const cow = dummyData.cattle.find(c => c.id === cowId);
+                    if (cow) {
+                        currentCowDetail = cow;
+                        navigateTo('dashboard');
+                    }
+                });
+            });
+            
+            // Search in cattle list
+            const searchInput = document.getElementById('searchCattle');
+            if (searchInput) {
+                searchInput.addEventListener('input', function() {
+                    const searchTerm = this.value.toLowerCase();
+                    
+                    document.querySelectorAll('.cattle-row').forEach(row => {
+                        const text = row.textContent.toLowerCase();
+                        if (text.includes(searchTerm)) {
+                            row.style.display = '';
+                        } else {
+                            row.style.display = 'none';
+                        }
+                    });
+                });
+            }
+            
+            // Alert tabs
+            document.querySelectorAll('.alert-tab').forEach(tab => {
+                tab.addEventListener('click', function() {
+                    // Remove active class from all tabs
+                    document.querySelectorAll('.alert-tab').forEach(t => {
+                        t.classList.remove('active', 'text-gray-800', 'border-b-2', 'border-farm-500');
+                        t.classList.add('text-gray-500', 'hover:text-gray-700');
+                    });
+                    
+                    // Add active class to clicked tab
+                    this.classList.add('active', 'text-gray-800', 'border-b-2', 'border-farm-500');
+                    this.classList.remove('text-gray-500', 'hover:text-gray-700');
+                    
+                    // In a real app, this would filter alerts
+                    alert('Fitur filter tab akan diimplementasikan dalam versi lengkap');
+                });
+            });
+            
+            // Simulate real-time updates
+            setInterval(() => {
+                // Update "last update" times
+                document.querySelectorAll('[data-live-update]').forEach(el => {
+                    const cowId = el.getAttribute('data-cow-id');
+                    const cow = dummyData.cattle.find(c => c.id === cowId);
+                    if (cow) {
+                        // Simulate small changes
+                        if (Math.random() > 0.7) {
+                            const change = (Math.random() - 0.5) * 0.3;
+                            cow.vitals.temperature.value = Math.round((cow.vitals.temperature.value + change) * 10) / 10;
+                        }
+                        
+                        // Update time
+                        const minutes = Math.floor(Math.random() * 5) + 1;
+                        cow.lastUpdate = `${minutes} menit lalu`;
+                    }
+                });
+                
+                // Blink live indicator
+                document.querySelectorAll('.live-pulse').forEach(indicator => {
+                    indicator.style.animation = 'none';
+                    setTimeout(() => {
+                        indicator.style.animation = 'pulse 2s infinite';
+                    }, 10);
+                });
+                
+                // Update alert badge if there are unhandled alerts
+                const unhandledCount = dummyData.alerts.filter(a => !a.handled).length;
+                const alertBadge = document.getElementById('alertBadge');
+                const mobileAlertBadge = document.getElementById('mobileAlertBadge');
+                
+                if (unhandledCount > 0) {
+                    if (alertBadge) alertBadge.style.display = 'block';
+                    if (mobileAlertBadge) mobileAlertBadge.style.display = 'block';
+                } else {
+                    if (alertBadge) alertBadge.style.display = 'none';
+                    if (mobileAlertBadge) mobileAlertBadge.style.display = 'none';
+                }
+            }, 5000);
+        }
+
+        // Inisialisasi aplikasi saat halaman dimuat
+        document.addEventListener('DOMContentLoaded', function() {
+            // Render dashboard pertama kali
+            navigateTo('dashboard');
+            
+            // Inisialisasi peta dashboard
+            setTimeout(() => {
+                initializeDashboardMap();
+            }, 300);
+            
+            // Handle window resize untuk peta
+            window.addEventListener('resize', function() {
+                if (maps.dashboard) {
+                    setTimeout(() => {
+                        maps.dashboard.invalidateSize();
+                    }, 100);
+                }
+                if (maps.live) {
+                    setTimeout(() => {
+                        maps.live.invalidateSize();
+                    }, 100);
+                }
+            });
+        });
+    </script>
+</body>
+</html>
