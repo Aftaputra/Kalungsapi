@@ -1,6 +1,7 @@
 """
 FarmTech WebSocket Server
 Real-time sensor data collection and broadcasting
+UPDATED: Split IMU (20Hz) and Sensor data (0.7Hz) into separate endpoints
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -26,7 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI
-app = FastAPI(title="FarmTech Sensor API", version="1.0.0")
+app = FastAPI(title="FarmTech Sensor API", version="2.0.0")
 
 # CORS middleware
 app.add_middleware(
@@ -41,10 +42,8 @@ app.add_middleware(
 # SERVE FRONTEND FILES
 # ============================================================
 
-# Path ke folder frontend
-frontend_dir = os.path.join(os. path.dirname(__file__), "..", "frontend")
+frontend_dir = os.path.join(os.path.dirname(__file__), "..", "frontend")
 
-# Mount static JS files FIRST
 if os.path.exists(frontend_dir):
     js_dir = os.path.join(frontend_dir, "js")
     if os.path.exists(js_dir):
@@ -63,56 +62,81 @@ class ConnectionManager:
     """Manage WebSocket connections"""
     
     def __init__(self):
-        # ESP32 devices connections
-        self.esp32_connections:  Dict[str, WebSocket] = {}
+        # ESP32 devices connections (sensor endpoint)
+        self.esp32_sensor_connections:  Dict[str, WebSocket] = {}
+        
+        # ESP32 devices connections (IMU endpoint)
+        self.esp32_imu_connections: Dict[str, WebSocket] = {}
         
         # Web dashboard connections
         self.dashboard_connections: Set[WebSocket] = set()
         
         # Statistics
         self.stats = {
-            "total_messages": 0,
-            "total_esp32_connected": 0,
+            "total_sensor_messages": 0,
+            "total_imu_messages": 0,
+            "total_esp32_sensor_connected": 0,
+            "total_esp32_imu_connected": 0,
             "total_dashboard_connected": 0
         }
     
-    async def connect_esp32(self, device_id: str, websocket: WebSocket):
-        """Connect ESP32 device"""
+    async def connect_esp32_sensor(self, device_id: str, websocket: WebSocket):
+        """Connect ESP32 device to SENSOR endpoint"""
         await websocket.accept()
-        self.esp32_connections[device_id] = websocket
-        self.stats["total_esp32_connected"] = len(self.esp32_connections)
-        logger.info(f"ESP32 {device_id} connected.  Total ESP32: {len(self.esp32_connections)}")
+        self.esp32_sensor_connections[device_id] = websocket
+        self.stats["total_esp32_sensor_connected"] = len(self.esp32_sensor_connections)
+        logger.info(f"[SENSOR] ESP32 {device_id} connected.  Total: {len(self.esp32_sensor_connections)}")
         
-        # Notify dashboards about new device
         await self.broadcast_to_dashboards({
             "type": "device_connected",
+            "endpoint": "sensor",
+            "device_id": device_id,
+            "timestamp": datetime.now().isoformat()
+        })
+    
+    async def connect_esp32_imu(self, device_id: str, websocket:  WebSocket):
+        """Connect ESP32 device to IMU endpoint"""
+        await websocket.accept()
+        self.esp32_imu_connections[device_id] = websocket
+        self.stats["total_esp32_imu_connected"] = len(self. esp32_imu_connections)
+        logger.info(f"[IMU] ESP32 {device_id} connected. Total: {len(self.esp32_imu_connections)}")
+        
+        await self.broadcast_to_dashboards({
+            "type": "device_connected",
+            "endpoint": "imu",
             "device_id": device_id,
             "timestamp": datetime.now().isoformat()
         })
     
     async def connect_dashboard(self, websocket:  WebSocket):
         """Connect web dashboard"""
-        await websocket. accept()
-        self.dashboard_connections.add(websocket)
-        self.stats["total_dashboard_connected"] = len(self. dashboard_connections)
+        await websocket.accept()
+        self.dashboard_connections. add(websocket)
+        self.stats["total_dashboard_connected"] = len(self.dashboard_connections)
         logger.info(f"Dashboard connected. Total dashboards: {len(self.dashboard_connections)}")
         
-        # Send initial data
         await self.send_initial_data(websocket)
     
-    def disconnect_esp32(self, device_id: str):
-        """Disconnect ESP32 device"""
-        if device_id in self. esp32_connections:
-            del self.esp32_connections[device_id]
-            self.stats["total_esp32_connected"] = len(self.esp32_connections)
-            logger.info(f"ESP32 {device_id} disconnected. Total ESP32: {len(self.esp32_connections)}")
+    def disconnect_esp32_sensor(self, device_id: str):
+        """Disconnect ESP32 from SENSOR endpoint"""
+        if device_id in self.esp32_sensor_connections:
+            del self.esp32_sensor_connections[device_id]
+            self.stats["total_esp32_sensor_connected"] = len(self.esp32_sensor_connections)
+            logger.info(f"[SENSOR] ESP32 {device_id} disconnected")
+    
+    def disconnect_esp32_imu(self, device_id: str):
+        """Disconnect ESP32 from IMU endpoint"""
+        if device_id in self.esp32_imu_connections:
+            del self. esp32_imu_connections[device_id]
+            self. stats["total_esp32_imu_connected"] = len(self.esp32_imu_connections)
+            logger.info(f"[IMU] ESP32 {device_id} disconnected")
     
     def disconnect_dashboard(self, websocket: WebSocket):
         """Disconnect web dashboard"""
         if websocket in self.dashboard_connections:
             self.dashboard_connections.remove(websocket)
             self.stats["total_dashboard_connected"] = len(self.dashboard_connections)
-            logger.info(f"Dashboard disconnected. Total dashboards: {len(self. dashboard_connections)}")
+            logger.info(f"Dashboard disconnected")
     
     async def broadcast_to_dashboards(self, message: dict):
         """Broadcast message to all connected dashboards"""
@@ -120,43 +144,33 @@ class ConnectionManager:
         
         for connection in self.dashboard_connections:
             try:
-                await connection. send_json(message)
+                await connection.send_json(message)
             except Exception as e:
-                logger.error(f"Error broadcasting to dashboard:  {e}")
-                disconnected. add(connection)
+                logger.error(f"Error broadcasting to dashboard: {e}")
+                disconnected.add(connection)
         
-        # Remove disconnected clients
         for conn in disconnected:
-            self. disconnect_dashboard(conn)
-    
-    async def send_to_esp32(self, device_id: str, message: dict):
-        """Send message to specific ESP32 device"""
-        if device_id in self.esp32_connections:
-            try:
-                await self.esp32_connections[device_id].send_json(message)
-            except Exception as e:
-                logger. error(f"Error sending to ESP32 {device_id}: {e}")
-                self.disconnect_esp32(device_id)
+            self.disconnect_dashboard(conn)
     
     async def send_initial_data(self, websocket: WebSocket):
         """Send initial data to newly connected dashboard"""
         try:
-            # Get recent sensor data
-            recent_data = await db.get_recent_data(limit=100)
-            
-            # Get device list
+            recent_sensor = await db.get_recent_sensor_data(limit=50)
+            recent_imu = await db.get_recent_imu_data(limit=100)
             devices = await db.get_all_devices()
-            
-            # Get statistics
-            stats = await db. get_statistics()
+            stats = await db.get_statistics()
             
             await websocket.send_json({
                 "type": "initial_data",
                 "data": {
-                    "sensor_readings": recent_data,
+                    "sensor_data": recent_sensor,
+                    "imu_data":  recent_imu,
                     "devices": devices,
                     "statistics": stats,
-                    "connected_devices": list(self.esp32_connections. keys())
+                    "connected_devices": {
+                        "sensor": list(self.esp32_sensor_connections. keys()),
+                        "imu": list(self.esp32_imu_connections.keys())
+                    }
                 }
             })
         except Exception as e: 
@@ -168,65 +182,157 @@ manager = ConnectionManager()
 
 
 # ============================================================
-# WEBSOCKET ENDPOINTS
+# WEBSOCKET ENDPOINTS - ESP32
 # ============================================================
 
-@app.websocket("/ws/esp32/{device_id}")
-async def websocket_esp32_endpoint(websocket: WebSocket, device_id: str):
+@app. websocket("/ws/esp32/sensor/{device_id}")
+async def websocket_esp32_sensor_endpoint(websocket: WebSocket, device_id: str):
     """
-    WebSocket endpoint for ESP32 devices
-    ESP32 connects here to send sensor data
+    WebSocket endpoint for ESP32 devices - SENSOR DATA ONLY
+    Rate: ~0.7Hz (1 message per 1. 45 seconds)
+    Data: suhu, battery, GPS, SpO2, heart rate
     """
-    await manager.connect_esp32(device_id, websocket)
+    await manager.connect_esp32_sensor(device_id, websocket)
     
     try:
-        while True:
-            # Receive data from ESP32
-            data = await websocket.receive_text()
+        while True: 
+            data = await websocket. receive_text()
             
             try:
                 sensor_data = json.loads(data)
                 sensor_data['device_id'] = device_id
                 sensor_data['timestamp'] = datetime. now().isoformat()
                 
-                logger.info(f"Received data from {device_id}: {len(data)} bytes")
+                batch_id = sensor_data.get('batch_id')
+                logger.info(f"[SENSOR] {device_id} | Batch {batch_id} | {len(data)} bytes")
                 
                 # Save to database
                 await db.save_sensor_data(sensor_data)
                 
-                # Broadcast to all dashboards
+                # Broadcast to dashboards
                 await manager.broadcast_to_dashboards({
                     "type": "sensor_data",
                     "data": sensor_data
                 })
                 
-                manager.stats["total_messages"] += 1
+                manager.stats["total_sensor_messages"] += 1
                 
-                # Send acknowledgment back to ESP32
+                # ACK
                 await websocket.send_json({
                     "status": "ok",
-                    "message":  "Data received",
-                    "timestamp": datetime.now().isoformat()
+                    "type": "sensor_ack",
+                    "batch_id": batch_id
                 })
                 
             except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON from {device_id}: {e}")
+                logger.error(f"[SENSOR] Invalid JSON from {device_id}: {e}")
                 await websocket.send_json({
                     "status":  "error",
                     "message": "Invalid JSON format"
                 })
+            except Exception as e:
+                logger.error(f"[SENSOR] Error processing data from {device_id}: {e}")
             
     except WebSocketDisconnect: 
-        manager.disconnect_esp32(device_id)
+        manager.disconnect_esp32_sensor(device_id)
         await manager.broadcast_to_dashboards({
             "type": "device_disconnected",
-            "device_id":  device_id,
+            "endpoint": "sensor",
+            "device_id": device_id,
             "timestamp": datetime.now().isoformat()
         })
     except Exception as e:
-        logger.error(f"Error in ESP32 WebSocket {device_id}: {e}")
-        manager.disconnect_esp32(device_id)
+        logger.error(f"[SENSOR] Error in WebSocket {device_id}: {e}")
+        manager.disconnect_esp32_sensor(device_id)
 
+
+@app.websocket("/ws/esp32/imu/{device_id}")
+async def websocket_esp32_imu_endpoint(websocket: WebSocket, device_id: str):
+    """
+    WebSocket endpoint for ESP32 devices - IMU DATA ONLY
+    """
+    await manager.connect_esp32_imu(device_id, websocket)
+    
+    message_count = 0
+    batch_start = datetime.now()
+    
+    try:
+        while True:
+            data = await websocket.receive_text()
+            
+            try:  
+                imu_data = json.loads(data)
+                imu_data['device_id'] = device_id
+                imu_data['timestamp'] = datetime.now().isoformat()
+                
+                # Save to database
+                await db.save_imu_data(imu_data)
+                
+                # ✅ BROADCAST to dashboards with proper structure
+                await manager.broadcast_to_dashboards({
+                    "type": "sensor_data",
+                    "data": {
+                        # IMU data
+                        "imu_x": imu_data.get('imu_x'),
+                        "imu_y": imu_data.get('imu_y'),
+                        "imu_z": imu_data.get('imu_z'),
+                        "sample_index": imu_data.get('sample_index'),
+                        "batch_id": imu_data.get('batch_id'),
+                        "seq_start": imu_data.get('seq_start'),
+                        
+                        # Device info
+                        "device_id": device_id,
+                        "timestamp": imu_data.get('timestamp'),
+                        
+                        # ESP32 specific (dari sensor data)
+                        "tempC": imu_data.get('tempC'),      # device temp
+                        "vbatt": imu_data.get('vbatt'),      # battery voltage
+                        
+                        # NULL untuk field yang belum ada
+                        "suhu_kaki": None,
+                        "vbatt_kaki": None,
+                        "suhu_leher": None,
+                        "vbatt_leher": None,
+                        "latitude": None,
+                        "longitude": None,
+                        "spo2": None,
+                        "heart_rate": None
+                    }
+                })
+                
+                manager.stats["total_imu_messages"] += 1
+                message_count += 1
+                
+                # Log setiap batch selesai (29 samples)
+                sample_index = imu_data.get('sample_index', 0)
+                if sample_index == 0:
+                    logger.info(f"[IMU] {device_id} | Batch {imu_data.get('batch_id')} | Starting...")
+                elif sample_index == 28:  # Last sample
+                    elapsed = (datetime.now() - batch_start).total_seconds()
+                    logger.info(f"[IMU] {device_id} | Batch {imu_data.get('batch_id')} | 29 samples in {elapsed:.2f}s")
+                    batch_start = datetime.now()
+                
+            except json.JSONDecodeError as e:  
+                logger.error(f"[IMU] Invalid JSON from {device_id}: {e}")
+            except Exception as e:
+                logger.error(f"[IMU] Error processing data from {device_id}: {e}")
+            
+    except WebSocketDisconnect:  
+        manager.disconnect_esp32_imu(device_id)
+        logger.info(f"[IMU] {device_id} disconnected after {message_count} messages")
+        await manager.broadcast_to_dashboards({
+            "type": "device_disconnected",
+            "endpoint": "imu",
+            "device_id": device_id,
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:  
+        logger.error(f"[IMU] Error in WebSocket {device_id}: {e}")
+        manager.disconnect_esp32_imu(device_id)
+        
+# ============================================================
+# WEBSOCKET ENDPOINT - DASHBOARD
+# ============================================================
 
 @app.websocket("/ws/dashboard")
 async def websocket_dashboard_endpoint(websocket: WebSocket):
@@ -238,7 +344,6 @@ async def websocket_dashboard_endpoint(websocket: WebSocket):
     
     try:
         while True:
-            # Receive commands from dashboard
             data = await websocket.receive_text()
             
             try:
@@ -248,7 +353,7 @@ async def websocket_dashboard_endpoint(websocket: WebSocket):
                 if command_type == "ping":
                     await websocket. send_json({
                         "type": "pong",
-                        "timestamp": datetime. now().isoformat()
+                        "timestamp": datetime.now().isoformat()
                     })
                 
                 elif command_type == "get_stats":
@@ -258,26 +363,19 @@ async def websocket_dashboard_endpoint(websocket: WebSocket):
                         "data": stats
                     })
                 
-                elif command_type == "get_device_data":
-                    device_id = command.get("device_id")
-                    limit = command.get("limit", 100)
-                    data = await db.get_device_data(device_id, limit)
-                    await websocket. send_json({
-                        "type": "device_data",
-                        "device_id": device_id,
+                elif command_type == "get_batch":
+                    batch_id = command.get("batch_id")
+                    data = await db.get_batch_data(batch_id)
+                    await websocket.send_json({
+                        "type": "batch_data",
+                        "batch_id": batch_id,
                         "data": data
                     })
                 
-                elif command_type == "send_command_to_device":
-                    # Forward command to specific ESP32
-                    device_id = command.get("device_id")
-                    device_command = command.get("command")
-                    await manager.send_to_esp32(device_id, device_command)
-                
-            except json. JSONDecodeError as e: 
+            except json.JSONDecodeError as e:
                 logger.error(f"Invalid JSON from dashboard: {e}")
             
-    except WebSocketDisconnect:
+    except WebSocketDisconnect: 
         manager.disconnect_dashboard(websocket)
     except Exception as e:
         logger.error(f"Error in dashboard WebSocket: {e}")
@@ -293,25 +391,30 @@ async def api_info():
     """API information"""
     return {
         "service": "FarmTech Sensor API",
-        "version":  "1.0.0",
+        "version":  "2.0.0",
         "status": "running",
+        "architecture": "Split IMU (20Hz) and Sensor (0.7Hz)",
         "websocket_endpoints": {
-            "esp32": "/ws/esp32/{device_id}",
+            "esp32_sensor": "/ws/esp32/sensor/{device_id}",
+            "esp32_imu": "/ws/esp32/imu/{device_id}",
             "dashboard": "/ws/dashboard"
-        },
-        "dashboard":  "http://localhost:8000/"
+        }
     }
 
 
-@app.get("/api/status", tags=["default"])
+@app. get("/api/status", tags=["default"])
 async def get_status():
     """Get server status"""
     return {
         "status": "running",
         "connections": {
-            "esp32_devices": len(manager.esp32_connections),
+            "esp32_sensor": len(manager. esp32_sensor_connections),
+            "esp32_imu":  len(manager.esp32_imu_connections),
             "dashboards": len(manager.dashboard_connections),
-            "connected_devices": list(manager.esp32_connections. keys())
+            "connected_devices": {
+                "sensor": list(manager.esp32_sensor_connections.keys()),
+                "imu": list(manager.esp32_imu_connections.keys())
+            }
         },
         "statistics": manager.stats,
         "timestamp": datetime.now().isoformat()
@@ -323,13 +426,13 @@ async def get_devices():
     """Get all registered devices"""
     devices = await db.get_all_devices()
     return {
-        "devices": devices,
+        "devices":  devices,
         "count": len(devices)
     }
 
 
-@app.get("/api/devices/{device_id}/data", tags=["devices"])
-async def get_device_data(device_id: str, limit: int = 100):
+@app.get("/api/devices/{device_id}/sensor", tags=["devices"])
+async def get_device_sensor_data(device_id: str, limit: int = 100):
     """Get sensor data for specific device"""
     data = await db.get_device_data(device_id, limit)
     return {
@@ -339,13 +442,44 @@ async def get_device_data(device_id: str, limit: int = 100):
     }
 
 
-@app.get("/api/data/recent", tags=["data"])
-async def get_recent_data(limit: int = 100):
+@app.get("/api/devices/{device_id}/imu", tags=["devices"])
+async def get_device_imu_data(device_id: str, limit: int = 1000):
+    """Get IMU data for specific device"""
+    data = await db.get_device_imu_data(device_id, limit)
+    return {
+        "device_id": device_id,
+        "data": data,
+        "count": len(data)
+    }
+
+
+@app.get("/api/data/sensor/recent", tags=["data"])
+async def get_recent_sensor_data(limit: int = 100):
     """Get recent sensor data from all devices"""
-    data = await db.get_recent_data(limit)
+    data = await db.get_recent_sensor_data(limit)
     return {
         "data": data,
         "count": len(data)
+    }
+
+
+@app.get("/api/data/imu/recent", tags=["data"])
+async def get_recent_imu_data(limit: int = 1000):
+    """Get recent IMU data from all devices"""
+    data = await db.get_recent_imu_data(limit)
+    return {
+        "data": data,
+        "count":  len(data)
+    }
+
+
+@app.get("/api/batch/{batch_id}", tags=["data"])
+async def get_batch_data(batch_id: int):
+    """Get complete data for a batch (sensor + all 29 IMU samples)"""
+    data = await db.get_batch_data(batch_id)
+    return {
+        "batch_id":  batch_id,
+        "data": data
     }
 
 
@@ -356,79 +490,8 @@ async def get_statistics():
     return stats
 
 
-@app.post("/api/data", tags=["data"])
-async def post_sensor_data(data: dict):
-    """
-    HTTP POST endpoint (fallback for devices that can't use WebSocket)
-    """
-    try:
-        device_id = data.get('device_id')
-        data['timestamp'] = datetime.now().isoformat()
-        
-        # Save to database
-        await db. save_sensor_data(data)
-        
-        # Broadcast to dashboards
-        await manager.broadcast_to_dashboards({
-            "type": "sensor_data",
-            "data": data
-        })
-        
-        return {
-            "status": "ok",
-            "message": "Data received",
-            "device_id": device_id
-        }
-    except Exception as e:
-        logger.error(f"Error saving data: {e}")
-        return {
-            "status": "error",
-            "message": str(e)
-        }
-
-
-@app.get("/api/test/generate", tags=["testing"])
-async def generate_test_data():
-    """Generate dummy sensor data for testing"""
-    import random
-    
-    devices = ['DEV001', 'DEV002', 'DEV003']
-    count = 0
-    
-    for device_id in devices:
-        for _ in range(5):
-            data = {
-                'device_id': device_id,
-                'timestamp': datetime.now().isoformat(),
-                'imu_x': random.randint(-1000, 1000),
-                'imu_y': random.randint(-1000, 1000),
-                'imu_z': random.randint(-1000, 1000),
-                'suhu_kaki': random.randint(2500, 3500),
-                'vbatt_kaki': random.randint(3000, 4200),
-                'suhu_leher': random.randint(2500, 3500),
-                'vbatt_leher':  random.randint(3000, 4200),
-                'latitude': int(-7.7956 * 1e7),
-                'longitude': int(110.3695 * 1e7),
-                'spo2': random.randint(95, 100),
-                'heart_rate': random.randint(60, 100)
-            }
-            
-            await db.save_sensor_data(data)
-            await manager.broadcast_to_dashboards({
-                "type": "sensor_data",
-                "data":  data
-            })
-            count += 1
-    
-    return {
-        "status": "ok",
-        "generated": count,
-        "devices": devices
-    }
-
-
 # ============================================================
-# SERVE DASHBOARD HTML (MUST BE LAST!)
+# SERVE DASHBOARD HTML
 # ============================================================
 
 @app.get("/", include_in_schema=False)
@@ -439,8 +502,7 @@ async def serve_dashboard():
         return FileResponse(html_path)
     return {
         "error": "Dashboard not found",
-        "path": html_path,
-        "frontend_dir": frontend_dir
+        "message": "Frontend files not found"
     }
 
 
@@ -451,10 +513,12 @@ async def serve_dashboard():
 @app.on_event("startup")
 async def startup_event():
     """Initialize on startup"""
-    logger.info("🚀 FarmTech Server starting...")
+    logger.info("🚀 FarmTech Server v2.0 starting...")
+    logger.info("📊 Architecture: Split IMU (20Hz) + Sensor (0.7Hz)")
     await db.initialize()
-    logger.info("✅ Database initialized")
+    logger.info("✅ Database initialized with split schema")
     logger.info("🌐 WebSocket server ready")
+    logger.info(f"🔗 Server:  http://{Config.HOST}:{Config.PORT}")
 
 
 @app.on_event("shutdown")

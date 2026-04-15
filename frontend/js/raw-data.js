@@ -1,646 +1,315 @@
 // ============================================================
-// FARMTECH RAW DATA DASHBOARD - WebSocket Integrated
-// Main JavaScript file untuk raw data monitoring
+// BOVINCHECK - RAW DATA DASHBOARD
+// Real-time monitoring sensor sapi
 // ============================================================
 
-// Global state
+// ============================================================
+// STATE
+// ============================================================
 const state = {
-    devices: [],
-    sensorReadings: [],
-    filteredData: [],
-    currentPage: 1,
-    rowsPerPage: 50,
-    selectedDevice: 'all',
-    selectedTimeRange: '24h',
-    selectedSensorType: 'all',
-    charts: {},
-    ws: null
+    sensorReadings: [],    // semua raw data dari sensor (kaki & leher)
+    imuReadings: [],       // data IMU (akselerometer)
+    devices: [],           // daftar device yang terhubung
+    ws: null,
+    charts: { temp: null, imu: null },
+    stats: {
+        imuCount: 0,
+        sensorCount: 0,
+        lastUpdate: Date.now()
+    },
+    deviceFilter: 'all',
+    timeFilter: '24h'
 };
 
 // ============================================================
-// WebSocket Connection
+// WEBSOCKET
 // ============================================================
-
-/**
- * Initialize WebSocket connection
- */
-function initializeWebSocket() {
+function initWebSocket() {
     state.ws = new FarmTechWebSocket();
-    
-    // Set up callbacks
-    state.ws.onInitialData = handleInitialData;
-    state. ws.onSensorData = handleNewSensorData;
-    state. ws.onDeviceConnected = handleDeviceConnected;
-    state.ws. onDeviceDisconnected = handleDeviceDisconnected;
-    state.ws.onStatistics = handleStatistics;
-    state. ws.onConnectionChange = handleConnectionChange;
-    
-    // Connect
+    state.ws.onInitialData = (data) => {
+        console.log('[BovinCheck] Initial data', data);
+        if (data.devices) {
+            state.devices = data.devices.map(d => ({ id: d.device_id, status: 'online', lastSeen: new Date() }));
+        }
+        if (data.sensor_data) {
+            data.sensor_data.forEach(r => addSensorReading(r));
+        }
+        if (data.imu_data) {
+            data.imu_data.forEach(r => addIMUReading(r));
+        }
+        updateUI();
+        startTimers();
+    };
+    state.ws.onSensorData = (data) => {
+        // IMU data memiliki sample_index, sensor data tidak
+        if (data.sample_index !== undefined) {
+            addIMUReading(data);
+            state.stats.imuCount++;
+        } else {
+            addSensorReading(data);
+            state.stats.sensorCount++;
+            const dev = state.devices.find(d => d.id === data.device_id);
+            if (dev) {
+                dev.lastSeen = new Date();
+                dev.status = 'online';
+            }
+        }
+    };
+    state.ws.onDeviceConnected = (id) => {
+        if (!state.devices.find(d => d.id === id)) {
+            state.devices.push({ id, status: 'online', lastSeen: new Date() });
+        } else {
+            state.devices.find(d => d.id === id).status = 'online';
+        }
+    };
+    state.ws.onDeviceDisconnected = (id) => {
+        const dev = state.devices.find(d => d.id === id);
+        if (dev) dev.status = 'offline';
+    };
     state.ws.connect();
 }
 
-/**
- * Handle initial data from server
- */
-function handleInitialData(data) {
-    console.log('📦 Received initial data from server');
-    
-    if (! data) {
-        console.warn('No initial data');
-        return;
-    }
-    
-    // ✅ HANYA update devices dan connected status, JANGAN replace data yang sudah ada
-    if (data.devices && Array.isArray(data.devices)) {
-        // Update devices (tapi jangan hapus data sensor)
-        const newDevices = data.devices.map(device => ({
-            id: device.device_id,
-            cowId: device.cow_id || device.device_id. replace('DEV', ''),
-            status: determineDeviceStatus(device.last_seen),
-            signal: 'strong',
-            lastData: device.last_seen ?  new Date(device.last_seen) : new Date(),
-            firmwareVersion: device.firmware_version || 'Unknown'
-        }));
-        
-        // Merge dengan existing devices
-        newDevices.forEach(newDev => {
-            const existing = state.devices.find(d => d.id === newDev.id);
-            if (existing) {
-                Object.assign(existing, newDev);
-            } else {
-                state.devices.push(newDev);
-            }
-        });
-    }
-    
-    // ✅ HANYA load data dari server jika state kosong
-    if (state. sensorReadings.length === 0 && data.sensor_readings && data.sensor_readings.length > 0) {
-        state.sensorReadings = data.sensor_readings. map(reading => ({
-            timestamp: reading.timestamp,
-            deviceId: reading.device_id,
-            imu_x: reading.imu_x || 0,
-            imu_y: reading.imu_y || 0,
-            imu_z: reading.imu_z || 0,
-            suhu_kaki: reading.suhu_kaki || 0,
-            vbatt_kaki: reading.vbatt_kaki || 0,
-            suhu_leher: reading.suhu_leher || 0,
-            vbatt_leher: reading. vbatt_leher || 0,
-            latitude: reading.latitude || 0,
-            longitude: reading.longitude || 0,
-            spo2: reading.spo2 || 0,
-            heart_rate: reading.heart_rate || 0
-        }));
-        
-        console.log(`✅ Loaded ${state.sensorReadings.length} initial readings`);
-    }
-    
-    // Update connected devices
-    if (data.connected_devices && Array.isArray(data.connected_devices)) {
-        data.connected_devices.forEach(deviceId => {
-            const device = state.devices.find(d => d.id === deviceId);
-            if (device) device.status = 'online';
-        });
-    }
-    
-    // Update UI
-    requestAnimationFrame(() => {
-        populateFilters();
-        applyFilters();
-        updateQuickStats();
-        renderDeviceStatus();
-        initializeCharts();
-    });
-}
-
-/**
- * Handle new sensor data (real-time)
- */
-function handleNewSensorData(data) {
-    console.log('📊 New sensor data:', data. device_id);
-    
-    // Convert to internal format
-    const newReading = {
-        timestamp: data.timestamp,
+function addSensorReading(data) {
+    const reading = {
+        timestamp: data.timestamp || new Date().toISOString(),
         deviceId: data.device_id,
-        imu_x: data.imu_x || 0,
-        imu_y: data. imu_y || 0,
-        imu_z: data.imu_z || 0,
-        suhu_kaki: data.suhu_kaki || 0,
-        vbatt_kaki: data.vbatt_kaki || 0,
-        suhu_leher: data.suhu_leher || 0,
-        vbatt_leher: data.vbatt_leher || 0,
-        latitude: data.latitude || 0,
-        longitude:  data.longitude || 0,
-        spo2: data.spo2 || 0,
-        heart_rate: data.heart_rate || 0
+        tempC: data.tempC ?? null,
+        vbatt: data.vbatt ?? null,
+        suhu_kaki: data.suhu_kaki ?? null,
+        vbatt_kaki: data.vbatt_kaki ?? null,
+        suhu_leher: data.suhu_leher ?? null,
+        vbatt_leher: data.vbatt_leher ?? null,
+        latitude: data.latitude ?? null,
+        longitude: data.longitude ?? null,
+        spo2: data.spo2 ?? null,
+        heart_rate: data.heart_rate ?? null
     };
-    
-    // Add to beginning (newest first)
-    state.sensorReadings.unshift(newReading);
-    
-    // Keep only last 1000 readings
-    if (state.sensorReadings. length > 1000) {
-        state.sensorReadings = state.sensorReadings.slice(0, 1000);
-    }
-    
-    // ✅ SAVE to localStorage
-    saveDataToLocalStorage();
-    
-    // Update device status
-    const device = state. devices.find(d => d. id === data.device_id);
-    if (device) {
-        device.lastData = new Date(data.timestamp);
-        device.status = 'online';
-    }
-    
-    // Update UI (tanpa reload penuh)
-    updateUIIncremental();
+    state.sensorReadings.unshift(reading);
+    if (state.sensorReadings.length > 1000) state.sensorReadings = state.sensorReadings.slice(0, 1000);
 }
 
-/**
- * Handle device connected event
- */
-function handleDeviceConnected(deviceId) {
-    console.log('🔌 Device connected:', deviceId);
-    
-    let device = state.devices.find(d => d.id === deviceId);
-    
-    if (!device) {
-        // New device, add to list
-        device = {
-            id: deviceId,
-            cowId: deviceId.replace('DEV', ''),
-            status: 'online',
-            signal: 'strong',
-            lastData:  new Date(),
-            firmwareVersion: 'Unknown'
-        };
-        state.devices.push(device);
-        populateFilters();
-    } else {
-        device.status = 'online';
-    }
-    
-    renderDeviceStatus();
-    updateQuickStats();
-}
-
-/**
- * Save data to localStorage
- */
-function saveDataToLocalStorage() {
-    try {
-        const dataToSave = {
-            sensorReadings: state.sensorReadings. slice(0, 500), // Save last 500
-            devices: state.devices,
-            timestamp: new Date().toISOString()
-        };
-        localStorage.setItem('farmtech_data', JSON.stringify(dataToSave));
-    } catch (e) {
-        console.warn('Failed to save to localStorage:', e);
-    }
-}
-
-/**
- * Load data from localStorage
- */
-function loadDataFromLocalStorage() {
-    try {
-        const saved = localStorage.getItem('farmtech_data');
-        if (saved) {
-            const data = JSON.parse(saved);
-            state.sensorReadings = data. sensorReadings || [];
-            state.devices = data.devices || [];
-            console.log(`📦 Loaded ${state. sensorReadings.length} readings from localStorage`);
-            return true;
-        }
-    } catch (e) {
-        console.warn('Failed to load from localStorage:', e);
-    }
-    return false;
-}
-
-/**
- * Update UI incrementally (tanpa reload penuh)
- */
-function updateUIIncremental() {
-    // Update stats
-    updateQuickStats();
-    
-    // Update table HANYA jika di halaman 1
-    if (state.currentPage === 1) {
-        renderSensorDataTable();
-    }
-    
-    // Update device status
-    renderDeviceStatus();
-    
-    // Update chart setiap 10 data
-    if (state.sensorReadings.length % 10 === 0) {
-        updateCharts();
-    }
-}
-
-/**
- * Handle device disconnected event
- */
-function handleDeviceDisconnected(deviceId) {
-    console.log('🔌 Device disconnected:', deviceId);
-    
-    const device = state.devices.find(d => d.id === deviceId);
-    if (device) {
-        device.status = 'offline';
-    }
-    
-    renderDeviceStatus();
-    updateQuickStats();
-}
-
-/**
- * Handle statistics update
- */
-function handleStatistics(stats) {
-    console.log('📈 Statistics updated:', stats);
-}
-
-/**
- * Handle connection status change
- */
-function handleConnectionChange(connected) {
-    console.log('🌐 Connection status:', connected ? 'Connected' : 'Disconnected');
-}
-
-/**
- * Determine device status based on last seen time
- */
-function determineDeviceStatus(lastSeen) {
-    if (!lastSeen) return 'offline';
-    
-    const lastSeenTime = new Date(lastSeen).getTime();
-    const now = Date.now();
-    const diffMinutes = (now - lastSeenTime) / 60000;
-    
-    if (diffMinutes < 5) return 'online';
-    if (diffMinutes < 15) return 'warning';
-    return 'offline';
-}
-
-// ============================================================
-// UI RENDERING FUNCTIONS
-// ============================================================
-
-/**
- * Render table header dynamically based on SENSOR_CONFIG
- */
-function renderTableHeader() {
-    const thead = document.getElementById('tableHeader');
-    const headers = ['Timestamp', 'Device ID'];
-    
-    // Add sensor columns based on filter
-    const sensors = getSensorsByCategory(state.selectedSensorType);
-    sensors.forEach(sensor => {
-        headers.push(`${sensor.displayName}<br><span class="text-xs font-normal">(${sensor.unit})</span>`);
+function addIMUReading(data) {
+    state.imuReadings.unshift({
+        timestamp: data.timestamp || new Date().toISOString(),
+        deviceId: data.device_id,
+        batchId: data.batch_id,
+        sampleIndex: data.sample_index,
+        imu_x: data.imu_x || 0,
+        imu_y: data.imu_y || 0,
+        imu_z: data.imu_z || 0
     });
-
-    thead.innerHTML = `
-        <tr>
-            ${headers.map(h => `<th>${h}</th>`).join('')}
-        </tr>
-    `;
+    if (state.imuReadings.length > 500) state.imuReadings = state.imuReadings.slice(0, 500);
 }
 
-/**
- * Render sensor data table
- */
-function renderSensorDataTable() {
-    const tableBody = document.getElementById('sensorDataBody');
-    const rowCount = document.getElementById('rowCount');
-    const totalRows = document.getElementById('totalRows');
-    
-    tableBody.innerHTML = '';
-    
-    const startIdx = (state.currentPage - 1) * state.rowsPerPage;
-    const endIdx = startIdx + state.rowsPerPage;
-    const pageData = state.filteredData.slice(startIdx, endIdx);
-    
-    rowCount.textContent = pageData.length;
-    totalRows.textContent = state.filteredData.length;
+// ============================================================
+// FILTER DATA BERDASARKAN JENIS (KAKI / LEHER / IMU)
+// ============================================================
+function getKakiData() {
+    let filtered = state.sensorReadings.filter(r => 
+        (r.suhu_kaki !== null || r.vbatt_kaki !== null || r.tempC !== null || r.vbatt !== null)
+    );
+    if (state.deviceFilter !== 'all') filtered = filtered.filter(r => r.deviceId === state.deviceFilter);
+    return filtered;
+}
 
-    if (pageData.length === 0) {
-        tableBody.innerHTML = '<tr><td colspan="100" class="text-center py-8 text-gray-500">No data available</td></tr>';
+function getLeherData() {
+    let filtered = state.sensorReadings.filter(r => 
+        (r.spo2 !== null || r.heart_rate !== null || r.suhu_leher !== null || r.vbatt_leher !== null || r.latitude !== null || r.longitude !== null)
+    );
+    if (state.deviceFilter !== 'all') filtered = filtered.filter(r => r.deviceId === state.deviceFilter);
+    return filtered;
+}
+
+function getIMUData() {
+    let filtered = state.imuReadings;
+    if (state.deviceFilter !== 'all') filtered = filtered.filter(r => r.deviceId === state.deviceFilter);
+    return filtered;
+}
+
+// ============================================================
+// RENDER TABEL
+// ============================================================
+function renderKakiTable() {
+    const tbody = document.getElementById('kakiDataBody');
+    const countSpan = document.getElementById('kakiRowCount');
+    const data = getKakiData().slice(0, 100);
+    if (countSpan) countSpan.textContent = data.length;
+    if (!tbody) return;
+    if (data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="text-center py-8 text-gray-500">No data从\n</td></tr>';
         return;
     }
-
-    const sensors = getSensorsByCategory(state. selectedSensorType);
-
-    pageData.forEach(reading => {
-        const row = document.createElement('tr');
-        
-        // Format timestamp
-        const timestamp = new Date(reading.timestamp);
-        const timeStr = timestamp.toLocaleString('id-ID', {
-            year: 'numeric',
-            month: '2-digit',
-            day:  '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit'
-        });
-
-        let cells = [
-            `<td class="font-mono text-xs">${timeStr}</td>`,
-            `<td class="font-medium">${reading.deviceId}</td>`
-        ];
-
-        // Add sensor value cells
-        sensors.forEach(sensor => {
-            const rawValue = reading[sensor.field];
-            if (rawValue === null || rawValue === undefined) {
-                cells.push(`<td class="text-gray-400">-</td>`);
-                return;
-            }
-            
-            const scaledValue = applySensorScale(sensor.field, rawValue);
-            const threshold = checkThreshold(sensor.field, rawValue);
-            
-            let cellClass = 'value-normal';
-            if (threshold === 'high') cellClass = 'value-high';
-            else if (threshold === 'low') cellClass = 'value-low';
-
-            let formattedValue;
-            if (sensor.type. includes('int16') || sensor.type === 'int32') {
-                formattedValue = scaledValue.toFixed(2);
-            } else {
-                formattedValue = Math.round(scaledValue);
-            }
-
-            cells.push(`<td class="${cellClass}">${formattedValue}</td>`);
-        });
-
-        row.innerHTML = cells.join('');
-        tableBody.appendChild(row);
-    });
-
-    // Update last update time
-    document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('id-ID');
+    const formatTemp = (v) => v !== null ? (v * 0.01).toFixed(1) : '-';
+    const formatBatt = (v) => v !== null ? v : '-';
+    tbody.innerHTML = data.map(r => {
+        const time = new Date(r.timestamp).toLocaleTimeString('id-ID');
+        const tempKaki = r.suhu_kaki !== null ? formatTemp(r.suhu_kaki) : formatTemp(r.tempC);
+        const battKaki = r.vbatt_kaki !== null ? formatBatt(r.vbatt_kaki) : formatBatt(r.vbatt);
+        return `<tr>
+            <td class="font-mono text-xs">${time}</td>
+            <td class="font-medium">${r.deviceId}</td>
+            <td class="value-normal">${tempKaki}</td>
+            <td>${battKaki}</td>
+        </tr>`;
+    }).join('');
+    document.getElementById('kakiLastUpdate').innerText = new Date().toLocaleTimeString('id-ID');
 }
 
-/**
- * Render device status table
- */
+function renderLeherTable() {
+    const tbody = document.getElementById('leherDataBody');
+    const countSpan = document.getElementById('leherRowCount');
+    const data = getLeherData().slice(0, 100);
+    if (countSpan) countSpan.textContent = data.length;
+    if (!tbody) return;
+    if (data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center py-8 text-gray-500">No data</td></tr>';
+        return;
+    }
+    const formatTemp = (v) => v !== null ? (v * 0.01).toFixed(1) : '-';
+    const formatBatt = (v) => v !== null ? v : '-';
+    const formatGPS = (v) => (v !== null && v !== 0) ? (v / 10000000).toFixed(6) : '-';
+    tbody.innerHTML = data.map(r => {
+        const time = new Date(r.timestamp).toLocaleTimeString('id-ID');
+        return `<tr>
+            <td class="font-mono text-xs">${time}</td>
+            <td class="font-medium">${r.deviceId}</td>
+            <td class="value-normal">${formatTemp(r.suhu_leher)}</td>
+            <td>${formatBatt(r.vbatt_leher)}</td>
+            <td class="value-normal">${r.spo2 !== null ? r.spo2 : '-'}</td>
+            <td class="value-normal">${r.heart_rate !== null ? r.heart_rate : '-'}</td>
+            <td class="font-mono">${formatGPS(r.latitude)}</td>
+            <td class="font-mono">${formatGPS(r.longitude)}</td>
+        </tr>`;
+    }).join('');
+    document.getElementById('leherLastUpdate').innerText = new Date().toLocaleTimeString('id-ID');
+}
+
+function renderIMUTable() {
+    const tbody = document.getElementById('imuDataBody');
+    const countSpan = document.getElementById('imuRowCount');
+    const data = getIMUData().slice(0, 100);
+    if (countSpan) countSpan.textContent = data.length;
+    if (!tbody) return;
+    if (data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center py-8 text-gray-500">No IMU data</td></tr>';
+        return;
+    }
+    tbody.innerHTML = data.map(r => {
+        const time = new Date(r.timestamp).toLocaleTimeString('id-ID');
+        const x = (r.imu_x * 0.01).toFixed(2);
+        const y = (r.imu_y * 0.01).toFixed(2);
+        const z = (r.imu_z * 0.01).toFixed(2);
+        return `<tr>
+            <td class="font-mono text-xs">${time}</td>
+            <td class="font-medium">${r.deviceId}</td>
+            <td>${r.batchId ?? '-'}</td>
+            <td>${r.sampleIndex ?? '-'}</td>
+            <td class="value-normal">${x}</td>
+            <td class="value-normal">${y}</td>
+            <td class="value-normal">${z}</td>
+        </tr>`;
+    }).join('');
+    document.getElementById('imuLastUpdate').innerText = new Date().toLocaleTimeString('id-ID');
+}
+
 function renderDeviceStatus() {
-    const tableBody = document.getElementById('deviceStatusBody');
-    tableBody.innerHTML = '';
-
+    const tbody = document.getElementById('deviceStatusBody');
+    if (!tbody) return;
     if (state.devices.length === 0) {
-        tableBody. innerHTML = '<tr><td colspan="7" class="text-center py-4 text-gray-500">No devices registered</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center py-4 text-gray-500">No devices</td></tr>';
         return;
     }
-
-    state.devices.forEach(device => {
-        const row = document.createElement('tr');
-        row.className = 'border-b border-gray-100 last:border-0 cursor-pointer hover:bg-gray-50';
-        
-        // Get latest battery values from sensor data
-        const latestData = state.sensorReadings. find(r => r.deviceId === device. id);
-        const battLeher = latestData ? Math.round(applySensorScale('vbatt_leher', latestData.vbatt_leher)) : 0;
-        const battKaki = latestData ? Math.round(applySensorScale('vbatt_kaki', latestData. vbatt_kaki)) : 0;
-
-        // Status indicator
-        let statusIndicator, statusClass;
-        if (device.status === 'online') {
-            statusIndicator = '<span class="sensor-status sensor-online"></span>';
-            statusClass = 'text-green-600';
-        } else if (device. status === 'warning') {
-            statusIndicator = '<span class="sensor-status sensor-warning"></span>';
-            statusClass = 'text-amber-600';
-        } else {
-            statusIndicator = '<span class="sensor-status sensor-offline"></span>';
-            statusClass = 'text-gray-500';
-        }
-
-        // Battery indicators
-        let battLeherClass = battLeher > 3700 ? 'text-green-600' : battLeher > 3300 ? 'text-amber-600' : 'text-red-600';
-        let battKakiClass = battKaki > 3700 ? 'text-green-600' : battKaki > 3300 ? 'text-amber-600' : 'text-red-600';
-
-        // Signal indicator
-        let signalClass = device.signal === 'strong' ? 'text-green-600' : 
-                         device.signal === 'medium' ? 'text-amber-600' : 
-                         device.signal === 'weak' ?  'text-red-600' : 'text-gray-500';
-
-        // Time since last data
-        const timeDiff = Date.now() - device.lastData.getTime();
-        const minutes = Math.floor(timeDiff / 60000);
-        const lastDataStr = minutes < 1 ? 'Just now' : 
-                           minutes < 60 ? `${minutes} min ago` :
-                           `${Math.floor(minutes / 60)}h ago`;
-
-        row.innerHTML = `
-            <td class="py-3 font-medium">${device.id}</td>
-            <td class="py-3">Sapi #${device.cowId}</td>
-            <td class="py-3">
-                ${statusIndicator}
-                <span class="${statusClass}">${device.status. toUpperCase()}</span>
-            </td>
-            <td class="py-3 ${battLeherClass} font-medium">${battLeher} mV</td>
-            <td class="py-3 ${battKakiClass} font-medium">${battKaki} mV</td>
-            <td class="py-3 ${signalClass}">
-                <i class="fa-solid fa-wifi mr-1"></i> ${device.signal}
-            </td>
-            <td class="py-3">${lastDataStr}</td>
-        `;
-
-        row.addEventListener('click', () => selectDevice(device.id));
-        tableBody.appendChild(row);
-    });
-}
-
-/**
- * Select device and update UI
- */
-function selectDevice(deviceId) {
-    document.getElementById('selectedDevice').textContent = deviceId;
-    document.getElementById('deviceSelect').value = deviceId;
-    state.selectedDevice = deviceId;
-    applyFilters();
-}
-
-/**
- * Update quick stats
- */
-function updateQuickStats() {
-    const onlineDevices = state.devices.filter(d => d.status === 'online').length;
-    const warningDevices = state.devices.filter(d => d.status === 'warning').length;
-    
-    document.getElementById('totalDevices').textContent = state. devices.length;
-    document. getElementById('deviceStatus').innerHTML = `
-        <span class="sensor-status sensor-online"></span> ${onlineDevices} Online
-        <span class="sensor-status sensor-warning ml-3"></span> ${warningDevices} Warning
-    `;
-    
-    document.getElementById('totalDataPoints').textContent = 
-        state.sensorReadings.length > 1000 ? 
-        `${(state.sensorReadings.length / 1000).toFixed(1)}K` : 
-        state.sensorReadings.length;
-    
-    const recentCount = state.sensorReadings. filter(r => 
-        new Date(r.timestamp) > new Date(Date.now() - 3600000)
-    ).length;
-    document.getElementById('recentDataPoints').textContent = `+${recentCount} dalam 1 jam terakhir`;
-    
-    // Estimate data size (rough calculation)
-    const dataSize = (state.sensorReadings.length * 150) / (1024 * 1024);
-    document.getElementById('totalDataSize').textContent = `${dataSize.toFixed(1)} MB`;
-    
-    const todayData = state.sensorReadings. filter(r => {
-        const rDate = new Date(r.timestamp);
-        const today = new Date();
-        return rDate.toDateString() === today.toDateString();
-    }).length;
-    const todaySize = (todayData * 150) / (1024 * 1024);
-    document.getElementById('todayDataSize').textContent = `Hari ini:  ${todaySize.toFixed(1)} MB`;
-}
-
-/**
- * Populate filters based on SENSOR_CONFIG
- */
-function populateFilters() {
-    // Populate device select
-    const deviceSelect = document. getElementById('deviceSelect');
-    deviceSelect.innerHTML = '<option value="all">Semua Device</option>';
-    state.devices.forEach(device => {
-        const option = document.createElement('option');
-        option.value = device.id;
-        option.textContent = `${device.id} - Sapi #${device.cowId}`;
-        deviceSelect.appendChild(option);
-    });
-
-    // Populate sensor type select
-    const sensorTypeSelect = document.getElementById('sensorType');
-    sensorTypeSelect. innerHTML = '';
-    Object.keys(SENSOR_CATEGORIES).forEach(key => {
-        const category = SENSOR_CATEGORIES[key];
-        const option = document.createElement('option');
-        option.value = key;
-        option.textContent = category.name;
-        sensorTypeSelect.appendChild(option);
-    });
-
-    // Populate export columns
-    const exportColumns = document.getElementById('exportColumns');
-    exportColumns.innerHTML = `
-        <div class="space-y-2">
-            <label class="flex items-center">
-                <input type="checkbox" checked class="mr-2" value="timestamp"> Timestamp
-            </label>
-            <label class="flex items-center">
-                <input type="checkbox" checked class="mr-2" value="deviceId"> Device ID
-            </label>
-    `;
-    SENSOR_CONFIG.forEach(sensor => {
-        exportColumns.innerHTML += `
-            <label class="flex items-center">
-                <input type="checkbox" checked class="mr-2" value="${sensor.field}"> 
-                ${sensor.displayName} (${sensor.unit})
-            </label>
-        `;
-    });
-    exportColumns.innerHTML += '</div>';
+    tbody.innerHTML = state.devices.map(d => {
+        const statusIcon = d.status === 'online' ? '<span class="sensor-status sensor-online"></span>' : '<span class="sensor-status sensor-offline"></span>';
+        const lastSeen = d.lastSeen ? Math.floor((Date.now() - new Date(d.lastSeen)) / 60000) + 'm ago' : '-';
+        return `<tr class="border-b">
+            <td class="py-2 font-medium">${d.id}</td>
+            <td class="py-2">Sapi #${d.id.slice(-3)}</td>
+            <td class="py-2">${statusIcon} ${d.status.toUpperCase()}</td>
+            <td class="py-2">-</td>
+            <td class="py-2">-</td>
+            <td class="py-2">-</td>
+            <td class="py-2">${lastSeen}</td>
+        </tr>`;
+    }).join('');
 }
 
 // ============================================================
-// CHART FUNCTIONS
+// CHARTS
 // ============================================================
+function updateIMUChart() {
+    const ctx = document.getElementById('imuChart');
+    if (!ctx) return;
+    const data = state.imuReadings.slice(0, 100).reverse();
+    if (!data.length) return;
+    const labels = data.map((_, i) => i);
+    const x = data.map(r => r.imu_x * 0.01);
+    const y = data.map(r => r.imu_y * 0.01);
+    const z = data.map(r => r.imu_z * 0.01);
+    if (state.charts.imu) {
+        state.charts.imu.data.labels = labels;
+        state.charts.imu.data.datasets[0].data = x;
+        state.charts.imu.data.datasets[1].data = y;
+        state.charts.imu.data.datasets[2].data = z;
+        state.charts.imu.update('none');
+    } else {
+        state.charts.imu = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    { label: 'X', data: x, borderColor: '#ef4444', borderWidth: 1, fill: false, tension: 0.4, pointRadius: 0 },
+                    { label: 'Y', data: y, borderColor: '#3b82f6', borderWidth: 1, fill: false, tension: 0.4, pointRadius: 0 },
+                    { label: 'Z', data: z, borderColor: '#10b981', borderWidth: 1, fill: false, tension: 0.4, pointRadius: 0 }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false,
+                plugins: { legend: { position: 'top' } }
+            }
+        });
+    }
+}
 
-/**
- * Initialize temperature chart
- */
-function initTemperatureChart() {
+function updateTempChart() {
     const ctx = document.getElementById('tempChart');
     if (!ctx) return;
-
-    const labels = [];
-    const suhuLeherData = [];
-    const suhuKakiData = [];
-
-    // Get last 24 hours of data
-    const last24h = state.sensorReadings. filter(r => 
-        new Date(r.timestamp) > new Date(Date.now() - 24 * 3600000)
-    );
-
-    // Group by hour
+    const last24h = state.sensorReadings.filter(r => new Date(r.timestamp) > Date.now() - 24 * 3600000);
+    const labels = [], leher = [], kaki = [];
     for (let i = 23; i >= 0; i--) {
         const hourStart = new Date(Date.now() - i * 3600000);
         const hourEnd = new Date(hourStart.getTime() + 3600000);
-        
         const hourData = last24h.filter(r => {
             const t = new Date(r.timestamp);
             return t >= hourStart && t < hourEnd;
         });
-
         labels.push(hourStart.getHours() + ':00');
-
-        if (hourData.length > 0) {
-            const avgLeher = hourData.reduce((sum, r) => 
-                sum + applySensorScale('suhu_leher', r.suhu_leher), 0) / hourData.length;
-            const avgKaki = hourData.reduce((sum, r) => 
-                sum + applySensorScale('suhu_kaki', r. suhu_kaki), 0) / hourData.length;
-            
-            suhuLeherData.push(avgLeher);
-            suhuKakiData.push(avgKaki);
-        } else {
-            suhuLeherData.push(null);
-            suhuKakiData.push(null);
-        }
+        const validLeher = hourData.filter(r => r.suhu_leher !== null);
+        const avgLeher = validLeher.length ? validLeher.reduce((a,b)=>a+b.suhu_leher,0) / validLeher.length : null;
+        const validKaki = hourData.filter(r => r.suhu_kaki !== null);
+        const avgKaki = validKaki.length ? validKaki.reduce((a,b)=>a+b.suhu_kaki,0) / validKaki.length : null;
+        leher.push(avgLeher ? (avgLeher * 0.01).toFixed(1) : null);
+        kaki.push(avgKaki ? (avgKaki * 0.01).toFixed(1) : null);
     }
-
-    if (state.charts.tempChart) {
-        state.charts.tempChart.destroy();
-    }
-
-    state.charts.tempChart = new Chart(ctx, {
-        type:  'line',
-        data:  {
+    if (state.charts.temp) state.charts.temp.destroy();
+    state.charts.temp = new Chart(ctx, {
+        type: 'line',
+        data: {
             labels: labels,
             datasets: [
-                {
-                    label: 'Suhu Leher (°C)',
-                    data:  suhuLeherData,
-                    borderColor: '#ef4444',
-                    backgroundColor:  'rgba(239, 68, 68, 0.1)',
-                    borderWidth: 2,
-                    fill: true,
-                    tension: 0.4
-                },
-                {
-                    label: 'Suhu Kaki (°C)',
-                    data: suhuKakiData,
-                    borderColor: '#3b82f6',
-                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                    borderWidth: 2,
-                    fill: true,
-                    tension: 0.4
-                }
+                { label: 'Temp Leher (°C)', data: leher, borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)', fill: true, tension: 0.4 },
+                { label: 'Temp Kaki (°C)', data: kaki, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', fill: true, tension: 0.4 }
             ]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
-                legend:  {
-                    position: 'top',
-                }
-            },
-            scales: {
-                y: {
-                    beginAtZero: false,
-                    grid: {
-                        color: 'rgba(0, 0, 0, 0.05)'
-                    }
-                },
-                x: {
-                    grid: {
-                        display:  false
+                tooltip: {
+                    callbacks: {
+                        label: (ctx) => ctx.raw ? `${ctx.dataset.label}: ${ctx.raw}°C` : 'No data'
                     }
                 }
             }
@@ -648,379 +317,187 @@ function initTemperatureChart() {
     });
 }
 
-/**
- * Initialize IMU chart
- */
-function initIMUChart() {
-    const ctx = document.getElementById('imuChart');
-    if (!ctx) return;
-
-    // Get latest 50 readings
-    const latest = state.sensorReadings.slice(0, 50).reverse();
+// ============================================================
+// STATISTIK
+// ============================================================
+function updateStats() {
+    document.getElementById('totalDevices').innerText = state.devices.length;
+    const totalPoints = state.sensorReadings.length + state.imuReadings.length;
+    document.getElementById('totalDataPoints').innerText = totalPoints;
+    const online = state.devices.filter(d => d.status === 'online').length;
+    document.getElementById('deviceStatus').innerHTML = `<span class="sensor-status sensor-online"></span> ${online} Online <span class="sensor-status sensor-warning ml-3"></span> 0 Warning`;
+    const totalSize = (state.sensorReadings.length * 150 + state.imuReadings.length * 50) / 1024;
+    document.getElementById('totalDataSize').innerText = totalSize.toFixed(1) + ' KB';
+    document.getElementById('todayDataSize').innerText = `Hari ini: ${totalSize.toFixed(1)} KB`;
     
-    const labels = latest.map((_, idx) => idx);
-    const imuXData = latest.map(r => applySensorScale('imu_x', r.imu_x));
-    const imuYData = latest.map(r => applySensorScale('imu_y', r.imu_y));
-    const imuZData = latest.map(r => applySensorScale('imu_z', r.imu_z));
-
-    if (state.charts.imuChart) {
-        state.charts. imuChart.destroy();
-    }
-
-    state.charts.imuChart = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: labels,
-            datasets:  [
-                {
-                    label: 'IMU X (m/s²)',
-                    data: imuXData,
-                    borderColor: '#ef4444',
-                    backgroundColor:  'rgba(239, 68, 68, 0.1)',
-                    borderWidth: 1,
-                    fill: false,
-                    tension: 0.4
-                },
-                {
-                    label: 'IMU Y (m/s²)',
-                    data: imuYData,
-                    borderColor: '#3b82f6',
-                    backgroundColor:  'rgba(59, 130, 246, 0.1)',
-                    borderWidth: 1,
-                    fill: false,
-                    tension: 0.4
-                },
-                {
-                    label: 'IMU Z (m/s²)',
-                    data: imuZData,
-                    borderColor:  '#10b981',
-                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                    borderWidth: 1,
-                    fill: false,
-                    tension:  0.4
-                }
-            ]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins:  {
-                legend: {
-                    position: 'top',
-                }
-            },
-            scales: {
-                y: {
-                    beginAtZero: false,
-                    grid: {
-                        color: 'rgba(0, 0, 0, 0.05)'
-                    },
-                    title: {
-                        display: true,
-                        text: 'Acceleration (m/s²)'
-                    }
-                },
-                x: {
-                    grid: {
-                        display: false
-                    },
-                    title: {
-                        display: true,
-                        text: 'Sample Index'
-                    }
-                }
-            }
-        }
-    });
-}
-
-/**
- * Initialize all charts
- */
-function initializeCharts() {
-    initTemperatureChart();
-    initIMUChart();
-}
-
-/**
- * Update charts with new data
- */
-function updateCharts() {
-    initTemperatureChart();
-    initIMUChart();
-}
-
-// ============================================================
-// FILTER & EXPORT FUNCTIONS
-// ============================================================
-
-/**
- * Apply filters to data
- */
-function applyFilters() {
-    state.filteredData = state.sensorReadings;
-
-    // Filter by device
-    if (state.selectedDevice !== 'all') {
-        state.filteredData = state.filteredData.filter(r => 
-            r.deviceId === state.selectedDevice
-        );
-    }
-
-    // Filter by time range
     const now = Date.now();
-    let timeThreshold;
-    switch(state.selectedTimeRange) {
-        case '1h':  timeThreshold = now - 3600000; break;
-        case '6h':  timeThreshold = now - 6 * 3600000; break;
-        case '24h':  timeThreshold = now - 24 * 3600000; break;
-        case '7d': timeThreshold = now - 7 * 24 * 3600000; break;
-        case '30d': timeThreshold = now - 30 * 24 * 3600000; break;
-        default: timeThreshold = 0;
+    const elapsed = (now - state.stats.lastUpdate) / 1000;
+    if (elapsed >= 1) {
+        const imuRate = (state.stats.imuCount / elapsed).toFixed(1);
+        const sensorRate = (state.stats.sensorCount / elapsed).toFixed(1);
+        document.getElementById('recentDataPoints').innerHTML = `IMU: ${imuRate}/s | Sensor: ${sensorRate}/s`;
+        state.stats.imuCount = 0;
+        state.stats.sensorCount = 0;
+        state.stats.lastUpdate = now;
     }
-    
-    state.filteredData = state.filteredData.filter(r => 
-        new Date(r.timestamp).getTime() >= timeThreshold
-    );
-
-    // Reset to page 1
-    state.currentPage = 1;
-
-    // Re-render
-    renderTableHeader();
-    renderSensorDataTable();
 }
 
-/**
- * Export data
- */
-function exportData() {
+// ============================================================
+// EKSPOR DATA (MULTI FILE, KOLOM SESUAI JENIS)
+// ============================================================
+async function exportData() {
     const format = document.querySelector('input[name="exportFormat"]:checked').value;
     const startDate = document.getElementById('startDate').value;
     const endDate = document.getElementById('endDate').value;
+    const exportKaki = document.getElementById('exportKaki').checked;
+    const exportLeher = document.getElementById('exportLeher').checked;
+    const exportIMU = document.getElementById('exportIMU').checked;
 
-    // Get selected columns
-    const selectedColumns = Array.from(
-        document.querySelectorAll('#exportColumns input[type="checkbox"]:checked')
-    ).map(cb => cb.value);
-
-    // Filter data by date range
-    let dataToExport = state.filteredData;
-    
+    let start, end;
     if (startDate && endDate) {
-        const start = new Date(startDate);
-        const end = new Date(endDate);
+        start = new Date(startDate);
+        end = new Date(endDate);
         end.setHours(23, 59, 59, 999);
-        
-        dataToExport = dataToExport.filter(reading => {
-            const date = new Date(reading.timestamp);
-            return date >= start && date <= end;
-        });
     }
 
-    // Prepare export data
-    const exportDataArray = dataToExport.map(reading => {
-        const row = {};
-        selectedColumns.forEach(col => {
-            if (col === 'timestamp' || col === 'deviceId') {
-                row[col] = reading[col];
-            } else {
-                const sensor = SENSOR_CONFIG.find(s => s.field === col);
-                if (sensor) {
-                    row[col] = applySensorScale(col, reading[col]);
-                }
-            }
-        });
-        return row;
-    });
+    // Kolom yang diekspor per tipe
+    const columns = {
+        kaki: ['timestamp', 'deviceId', 'suhu_kaki', 'vbatt_kaki', 'tempC', 'vbatt'],
+        leher: ['timestamp', 'deviceId', 'suhu_leher', 'vbatt_leher', 'spo2', 'heart_rate', 'latitude', 'longitude'],
+        imu: ['timestamp', 'deviceId', 'batchId', 'sampleIndex', 'imu_x', 'imu_y', 'imu_z']
+    };
 
-    // Export based on format
-    if (format === 'csv') {
-        const headers = selectedColumns.map(col => {
-            if (col === 'timestamp' || col === 'deviceId') return col;
-            const sensor = SENSOR_CONFIG.find(s => s.field === col);
-            return sensor ? `${sensor.displayName} (${sensor.unit})` : col;
-        });
-        
-        const csvRows = [
-            headers.join(','),
-            ...exportDataArray.map(row => 
-                selectedColumns.map(col => {
-                    const value = row[col];
-                    return typeof value === 'string' ? `"${value}"` : value;
-                }).join(',')
-            )
-        ];
-        
-        const csvString = csvRows.join('\n');
-        downloadFile(csvString, 'text/csv', 'csv');
-        
-    } else if (format === 'json') {
-        const jsonString = JSON.stringify(exportDataArray, null, 2);
-        downloadFile(jsonString, 'application/json', 'json');
+    function pickColumns(obj, cols) {
+        const newObj = {};
+        for (let col of cols) {
+            if (obj.hasOwnProperty(col)) newObj[col] = obj[col];
+        }
+        return newObj;
     }
 
-    // Close modal
-    document.getElementById('exportModal').classList.remove('active');
-    console.log(`✅ Data exported:  ${exportDataArray.length} records`);
+    const exportType = async (data, typeName, colDef) => {
+        if (!data || data.length === 0) return false;
+        let filtered = data;
+        if (start && end) {
+            filtered = data.filter(r => new Date(r.timestamp) >= start && new Date(r.timestamp) <= end);
+        }
+        if (filtered.length === 0) return false;
+        const filteredData = filtered.map(row => pickColumns(row, colDef));
+        let content, filename = `BovinCheck_${typeName}_${new Date().toISOString().slice(0,19)}`;
+        if (format === 'csv') {
+            const replacer = (key, value) => value === null ? '' : value;
+            const header = colDef;
+            const csvRows = [
+                header.join(','),
+                ...filteredData.map(row => header.map(field => JSON.stringify(row[field], replacer)).join(','))
+            ];
+            content = csvRows.join('\n');
+            filename += '.csv';
+        } else {
+            content = JSON.stringify(filteredData, null, 2);
+            filename += '.json';
+        }
+        downloadFile(content, format === 'csv' ? 'text/csv' : 'application/json', filename);
+        return true;
+    };
+
+    let anyExported = false;
+    if (exportKaki) {
+        const kakiData = getKakiData(); // sudah tanpa field type
+        if (await exportType(kakiData, 'kaki', columns.kaki)) anyExported = true;
+    }
+    if (exportLeher) {
+        const leherData = getLeherData();
+        if (await exportType(leherData, 'leher', columns.leher)) anyExported = true;
+    }
+    if (exportIMU) {
+        const imuData = getIMUData();
+        if (await exportType(imuData, 'imu', columns.imu)) anyExported = true;
+    }
+    if (!anyExported) {
+        alert('Tidak ada data untuk diekspor.');
+    } else {
+        alert('Ekspor selesai.');
+    }
 }
 
-/**
- * Download file helper
- */
-function downloadFile(content, mimeType, extension) {
+function downloadFile(content, mimeType, filename) {
     const blob = new Blob([content], { type: mimeType });
-    const url = window.URL.createObjectURL(blob);
-    
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `farmtech_sensor_data_${new Date().toISOString().split('T')[0]}.${extension}`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
+    URL.revokeObjectURL(url);
 }
 
 // ============================================================
-// UTILITY FUNCTIONS
+// UI UPDATE & TIMERS
 // ============================================================
+function updateUI() {
+    renderKakiTable();
+    renderLeherTable();
+    renderIMUTable();
+    renderDeviceStatus();
+    updateStats();
+    updateIMUChart();
+    updateTempChart();
+    populateDeviceSelect();
+}
 
-/**
- * Update current time display
- */
+function populateDeviceSelect() {
+    const select = document.getElementById('deviceSelect');
+    if (!select) return;
+    const uniqueDevices = [...new Set(state.sensorReadings.map(r => r.deviceId).concat(state.imuReadings.map(r => r.deviceId)))];
+    select.innerHTML = '<option value="all">Semua Device</option>' + uniqueDevices.map(d => `<option value="${d}">${d}</option>`).join('');
+}
+
+function startTimers() {
+    setInterval(() => {
+        updateIMUChart();
+        renderIMUTable();
+    }, 500);
+    setInterval(() => {
+        renderKakiTable();
+        renderLeherTable();
+        renderDeviceStatus();
+        updateStats();
+        updateTempChart();
+    }, 2000);
+}
+
+function initControls() {
+    document.getElementById('applyFilters')?.addEventListener('click', () => {
+        state.deviceFilter = document.getElementById('deviceSelect').value;
+        updateUI();
+    });
+    document.getElementById('refreshBtn')?.addEventListener('click', () => updateUI());
+    const modal = document.getElementById('exportModal');
+    document.getElementById('exportBtn')?.addEventListener('click', () => modal.classList.add('active'));
+    document.getElementById('closeModal')?.addEventListener('click', () => modal.classList.remove('active'));
+    document.getElementById('cancelExport')?.addEventListener('click', () => modal.classList.remove('active'));
+    document.getElementById('confirmExport')?.addEventListener('click', () => {
+        exportData();
+        modal.classList.remove('active');
+    });
+}
+
 function updateCurrentTime() {
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString('id-ID', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit'
-    });
-    const dateStr = now.toLocaleDateString('id-ID', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-    });
-    
-    document.getElementById('currentTime').textContent = `${dateStr} ${timeStr}`;
+    const el = document.getElementById('currentTime');
+    if (el) el.innerText = new Date().toLocaleString('id-ID');
 }
 
-/**
- * Refresh all data
- */
-function refreshData() {
-    const btn = document.getElementById('refreshBtn');
-    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> Refreshing...';
-    btn.disabled = true;
-
-    // Request fresh data from server
-    if (state.ws && state.ws.isConnected) {
-        state.ws.requestStatistics();
-    }
-
-    setTimeout(() => {
-        applyFilters();
-        updateQuickStats();
-        renderDeviceStatus();
-        updateCharts();
-        
-        btn.innerHTML = '<i class="fa-solid fa-rotate-right mr-1"></i> Refresh';
-        btn.disabled = false;
-        console.log('✅ Data refreshed');
-    }, 1000);
-}
-
-/**
- * Handle pagination
- */
-function changePage(direction) {
-    const maxPage = Math.ceil(state.filteredData.length / state.rowsPerPage);
-    
-    if (direction === 'next' && state. currentPage < maxPage) {
-        state.currentPage++;
-    } else if (direction === 'prev' && state.currentPage > 1) {
-        state.currentPage--;
-    }
-    
-    document.getElementById('currentPage').textContent = state.currentPage;
-    renderSensorDataTable();
-}
-
-// ============================================================
-// INITIALIZATION & EVENT LISTENERS
-// ============================================================
-
-/**
- * Initialize application
- */
-function initializeApp() {
-    console.log('🚀 Initializing FarmTech Dashboard.. .');
-    
-    // ✅ LOAD from localStorage FIRST
-    const hasLocalData = loadDataFromLocalStorage();
-    
-    if (hasLocalData) {
-        // Render data yang ada
-        populateFilters();
-        applyFilters();
-        updateQuickStats();
-        renderDeviceStatus();
-        initializeCharts();
-        console.log('✅ UI rendered from localStorage');
-    }
-    
-    // Initialize WebSocket (akan merge dengan data lokal)
-    initializeWebSocket();
-    
-    // Set current time
+function init() {
+    initWebSocket();
     updateCurrentTime();
     setInterval(updateCurrentTime, 1000);
-    
-    // Set default export dates
-    const today = new Date().toISOString().split('T')[0];
-    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-    document.getElementById('startDate').value = yesterday;
-    document.getElementById('endDate').value = today;
-    
-    // Event listeners
-    document.getElementById('applyFilters').addEventListener('click', () => {
-        state.selectedDevice = document.getElementById('deviceSelect').value;
-        state.selectedTimeRange = document.getElementById('timeRange').value;
-        state.selectedSensorType = document.getElementById('sensorType').value;
-        applyFilters();
-        updateCharts();
-    });
-    
-    document.getElementById('refreshBtn').addEventListener('click', refreshData);
-    
-    // Export modal
-    const exportModal = document.getElementById('exportModal');
-    document.getElementById('exportBtn').addEventListener('click', () => {
-        exportModal.classList.add('active');
-    });
-    
-    document.getElementById('closeModal').addEventListener('click', () => {
-        exportModal.classList.remove('active');
-    });
-    
-    document.getElementById('cancelExport').addEventListener('click', () => {
-        exportModal.classList.remove('active');
-    });
-    
-    document.getElementById('confirmExport').addEventListener('click', exportData);
-    
-    exportModal.addEventListener('click', (e) => {
-        if (e.target === exportModal) {
-            exportModal.classList.remove('active');
-        }
-    });
-    
-    // Pagination
-    document.getElementById('prevPage').addEventListener('click', () => changePage('prev'));
-    document.getElementById('nextPage').addEventListener('click', () => changePage('next'));
-    
-    console.log('✅ FarmTech Dashboard initialized');
+    initControls();
 }
 
-// Start the application when DOM is ready
-document.addEventListener('DOMContentLoaded', initializeApp);
+// ============================================================
+// START
+// ============================================================
+document.addEventListener('DOMContentLoaded', init);
+window.addEventListener('beforeunload', () => state.ws?.disconnect());
